@@ -7,14 +7,11 @@
 #   - GR00T action_head DiT MLP Linear layers
 #
 # Usage:
-#   bash run_quantvla_convert_full.sh <task> <pack_dir> [output_dir] [base_checkpoint]
+#   bash run_quantvla_convert_full.sh <task> [pack_dir] [output_dir] [base_checkpoint]
 #
 # Example:
 #   BASE_CKPT=$(ls -d ~/.cache/huggingface/hub/models--youliangtan--gr00t-n1.5-libero-long-posttrain/snapshots/* | head -n 1)
-#   bash run_quantvla_convert_full.sh libero_10 \
-#     /home/hohyeon/private/QuantVLA/duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_long_0 \
-#     ./outputs/libero_10_quantvla_full_gptq_like \
-#     "$BASE_CKPT"
+#   bash run_quantvla_convert_full.sh libero_10
 
 set -euo pipefail
 
@@ -27,26 +24,26 @@ PACK_DIR="${2:-}"
 OUTPUT_DIR="${3:-./outputs/${TASK}_quantvla_full_gptq_like}"
 BASE_CHECKPOINT="${4:-}"
 
-if [[ -z "$PACK_DIR" ]]; then
-    echo "Usage: $0 <task> <pack_dir> [output_dir] [base_checkpoint]" >&2
-    exit 1
-fi
-
 case "$TASK" in
     libero_spatial)
         MODEL_CACHE_NAME="models--youliangtan--gr00t-n1.5-libero-spatial-posttrain"
+        PACK_SUFFIX="spatial"
         ;;
     libero_goal)
         MODEL_CACHE_NAME="models--youliangtan--gr00t-n1.5-libero-goal-posttrain"
+        PACK_SUFFIX="goal"
         ;;
     libero_object)
         MODEL_CACHE_NAME="models--youliangtan--gr00t-n1.5-libero-object-posttrain"
+        PACK_SUFFIX="object"
         ;;
     libero_90)
         MODEL_CACHE_NAME="models--youliangtan--gr00t-n1.5-libero-90-posttrain"
+        PACK_SUFFIX="90"
         ;;
     libero_10)
         MODEL_CACHE_NAME="models--youliangtan--gr00t-n1.5-libero-long-posttrain"
+        PACK_SUFFIX="long"
         ;;
     *)
         echo "Unknown task: $TASK" >&2
@@ -54,6 +51,17 @@ case "$TASK" in
         exit 1
         ;;
 esac
+
+if [[ -z "$PACK_DIR" ]]; then
+    QUANTVLA_REPO="${QUANTVLA_REPO:-$HOME/private/QuantVLA}"
+    PACK_DIR="$QUANTVLA_REPO/duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_${PACK_SUFFIX}_0"
+fi
+
+if [[ ! -d "$PACK_DIR" ]]; then
+    echo "QuantVLA pack directory not found: $PACK_DIR" >&2
+    echo "Run QuantVLA first, or pass the pack directory as the 2nd argument." >&2
+    exit 1
+fi
 
 if [[ -z "$BASE_CHECKPOINT" ]]; then
     CACHE_ROOT="${HF_HOME:-$HOME/.cache/huggingface}/hub/$MODEL_CACHE_NAME/snapshots"

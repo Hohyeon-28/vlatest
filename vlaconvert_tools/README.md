@@ -135,9 +135,23 @@ LLM targets plus the DiT MLP targets present in the QuantVLA `.npz` directory.
 Convenience wrapper:
 
 ```bash
-bash run_quantvla_convert_full.sh libero_10 \
-  /home/hohyeon/private/QuantVLA/duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_long_0 \
-  ./outputs/libero_10_quantvla_full_gptq_like
+bash run_quantvla_convert_full.sh libero_10
+```
+
+When `pack_dir` is omitted, the wrapper automatically selects the suite-specific
+QuantVLA pack from `${QUANTVLA_REPO:-$HOME/private/QuantVLA}`:
+
+```text
+libero_spatial -> duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_spatial_0
+libero_object  -> duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_object_0
+libero_goal    -> duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_goal_0
+libero_10      -> duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_long_0
+```
+
+Convert all four LIBERO suites after running QuantVLA for each suite:
+
+```bash
+bash run_quantvla_convert_all.sh
 ```
 
 The generated directory contains:
@@ -236,7 +250,6 @@ RealQuant server:
 CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh \
   real \
   libero_10 \
-  ./outputs/libero_10_quantvla_full_gptq_like \
   5556
 ```
 
@@ -246,9 +259,17 @@ FakeQuant server:
 CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh \
   fake \
   libero_10 \
-  ./outputs/libero_10_quantvla_full_gptq_like \
   5557
 ```
+
+If the converted checkpoint argument is omitted, the server wrapper uses:
+
+```text
+./outputs/<task>_quantvla_full_gptq_like
+```
+
+For example, `libero_goal` uses
+`./outputs/libero_goal_quantvla_full_gptq_like`.
 
 If your GR00T checkout is not at `~/private/QuantVLA_marlin` or
 `~/private/QuantVLA`, set it explicitly:

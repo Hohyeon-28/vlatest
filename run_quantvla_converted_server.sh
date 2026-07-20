@@ -2,7 +2,7 @@
 # Run GR00T LIBERO inference server with converted QuantVLA GPTQ-like weights.
 #
 # Usage:
-#   CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh <real|fake> <task> <converted_checkpoint> [port]
+#   CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh <real|fake> <task> [converted_checkpoint] [port]
 
 set -euo pipefail
 
@@ -11,6 +11,11 @@ MODE="${1:-real}"
 TASK="${2:-libero_10}"
 CONVERTED_CHECKPOINT="${3:-}"
 PORT="${4:-${PORT:-5556}}"
+
+if [[ -n "$CONVERTED_CHECKPOINT" && -z "${4:-}" && "$CONVERTED_CHECKPOINT" =~ ^[0-9]+$ ]]; then
+    PORT="$CONVERTED_CHECKPOINT"
+    CONVERTED_CHECKPOINT=""
+fi
 
 case "$MODE" in
     real|real_quant|marlin|gptq_marlin)
@@ -27,12 +32,12 @@ case "$MODE" in
 esac
 
 if [[ -z "$CONVERTED_CHECKPOINT" ]]; then
-    echo "Usage: $0 <real|fake> <task> <converted_checkpoint> [port]" >&2
-    exit 1
+    CONVERTED_CHECKPOINT="$SCRIPT_DIR/outputs/${TASK}_quantvla_full_gptq_like"
 fi
 
 if [[ ! -d "$CONVERTED_CHECKPOINT" ]]; then
     echo "Converted checkpoint directory not found: $CONVERTED_CHECKPOINT" >&2
+    echo "Run conversion first, for example: bash run_quantvla_convert_full.sh $TASK" >&2
     exit 1
 fi
 CONVERTED_CHECKPOINT="$(cd "$(dirname "$CONVERTED_CHECKPOINT")" && pwd)/$(basename "$CONVERTED_CHECKPOINT")"
