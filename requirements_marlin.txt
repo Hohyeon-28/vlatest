@@ -1,0 +1,9 @@
+﻿vllm
+gptqmodel
+datasets
+accelerate
+safetensors
+transformers
+sentencepiece
+protobuf
+triton

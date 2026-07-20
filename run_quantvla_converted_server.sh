@@ -1,0 +1,109 @@
+#!/bin/bash
+# Run GR00T LIBERO inference server with converted QuantVLA GPTQ-like weights.
+#
+# Usage:
+#   CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh <real|fake> <task> <converted_checkpoint> [port]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MODE="${1:-real}"
+TASK="${2:-libero_10}"
+CONVERTED_CHECKPOINT="${3:-}"
+PORT="${4:-${PORT:-5556}}"
+
+case "$MODE" in
+    real|real_quant|marlin|gptq_marlin)
+        MODE="real"
+        ;;
+    fake|fake_quant|torch|dequant|dequant_torch)
+        MODE="fake"
+        ;;
+    *)
+        echo "Unknown mode: $MODE" >&2
+        echo "Valid modes: real, fake" >&2
+        exit 1
+        ;;
+esac
+
+if [[ -z "$CONVERTED_CHECKPOINT" ]]; then
+    echo "Usage: $0 <real|fake> <task> <converted_checkpoint> [port]" >&2
+    exit 1
+fi
+
+if [[ ! -d "$CONVERTED_CHECKPOINT" ]]; then
+    echo "Converted checkpoint directory not found: $CONVERTED_CHECKPOINT" >&2
+    exit 1
+fi
+CONVERTED_CHECKPOINT="$(cd "$(dirname "$CONVERTED_CHECKPOINT")" && pwd)/$(basename "$CONVERTED_CHECKPOINT")"
+
+# Reuse the user's active venv. Only activate conda when it exists.
+if [[ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate "${GR00T_CONDA_ENV:-groot_test}" || true
+fi
+
+case "$TASK" in
+    libero_spatial)
+        MODEL_PATH="youliangtan/gr00t-n1.5-libero-spatial-posttrain"
+        DATA_CONFIG="examples.Libero.custom_data_config:LiberoDataConfig"
+        ;;
+    libero_goal)
+        MODEL_PATH="youliangtan/gr00t-n1.5-libero-goal-posttrain"
+        DATA_CONFIG="examples.Libero.custom_data_config:LiberoDataConfigMeanStd"
+        ;;
+    libero_object)
+        MODEL_PATH="youliangtan/gr00t-n1.5-libero-object-posttrain"
+        DATA_CONFIG="examples.Libero.custom_data_config:LiberoDataConfig"
+        ;;
+    libero_90)
+        MODEL_PATH="youliangtan/gr00t-n1.5-libero-90-posttrain"
+        DATA_CONFIG="examples.Libero.custom_data_config:LiberoDataConfig"
+        ;;
+    libero_10)
+        MODEL_PATH="youliangtan/gr00t-n1.5-libero-long-posttrain"
+        DATA_CONFIG="examples.Libero.custom_data_config:LiberoDataConfig"
+        ;;
+    *)
+        echo "Unknown task: $TASK" >&2
+        echo "Available tasks: libero_spatial, libero_goal, libero_object, libero_90, libero_10" >&2
+        exit 1
+        ;;
+esac
+
+# Avoid accidentally enabling the old DuQuant or GPTQ replacement path.
+for name in $(env | cut -d= -f1 | grep -E '^(GR00T_DUQUANT_|GR00T_GPTQ_)' || true); do
+    unset "$name"
+done
+
+mkdir -p /tmp/logs
+REPORT="${QUANTVLA_CONVERTED_REPORT:-/tmp/logs/quantvla_converted_${MODE}_${TASK}_replacement_report.json}"
+DENOISING_STEPS="${GR00T_DENOISING_STEPS:-8}"
+
+export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
+export QUANTVLA_CONVERTED_CHECKPOINT="$CONVERTED_CHECKPOINT"
+export QUANTVLA_CONVERTED_MODE="$MODE"
+export QUANTVLA_CONVERTED_REPORT="$REPORT"
+export QUANTVLA_CONVERTED_STRICT="${QUANTVLA_CONVERTED_STRICT:-1}"
+export QUANTVLA_CONVERTED_DTYPE="${QUANTVLA_CONVERTED_DTYPE:-bfloat16}"
+export GR00T_TIMING="${GR00T_TIMING:-1}"
+
+echo "=========================================="
+echo "Starting QuantVLA-converted LIBERO server"
+echo "Mode: $MODE"
+echo "Task: $TASK"
+echo "Model: $MODEL_PATH"
+echo "Converted checkpoint: $CONVERTED_CHECKPOINT"
+echo "Data config: $DATA_CONFIG"
+echo "Port: $PORT"
+echo "Report: $REPORT"
+echo "GR00T timing: $GR00T_TIMING"
+echo "=========================================="
+
+python scripts/inference_service.py \
+    --model_path "$MODEL_PATH" \
+    --server \
+    --data_config "$DATA_CONFIG" \
+    --denoising-steps "$DENOISING_STEPS" \
+    --port "$PORT" \
+    --embodiment-tag new_embodiment
