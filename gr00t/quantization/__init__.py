@@ -24,6 +24,7 @@ from .quantvla_converted_linear import (
     normalize_quantvla_converted_mode,
     replace_quantvla_converted_linears,
 )
+from .dit_mlp_probe import enable_dit_mlp_probe_if_configured
 
 __all__ = [
     "DuQuantConfig",
@@ -44,4 +45,5 @@ __all__ = [
     "enable_quantvla_converted_if_configured",
     "normalize_quantvla_converted_mode",
     "replace_quantvla_converted_linears",
+    "enable_dit_mlp_probe_if_configured",
 ]

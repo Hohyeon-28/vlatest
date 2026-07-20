@@ -125,6 +125,13 @@ class Gr00tPolicy(BasePolicy):
                 self.model.action_head.num_inference_timesteps = denoising_steps
                 print(f"Set action denoising steps to {denoising_steps}")
 
+        try:
+            from gr00t.quantization import enable_dit_mlp_probe_if_configured
+
+            enable_dit_mlp_probe_if_configured(self.model)
+        except Exception as e:
+            print(f"[GR00T] DiT MLP probe not enabled or failed to apply: {e}")
+
     def apply_transforms(self, obs: Dict[str, Any]) -> Dict[str, Any]:
         """
         Apply transforms to the observation.

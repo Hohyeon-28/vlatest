@@ -193,7 +193,9 @@ Definitions:
 - `FakeQuant`
   - Same converted QuantVLA GPTQ-like `qweight/scales`.
   - No Marlin kernel.
-  - Dequantizes to dense torch weight and runs torch `F.linear`.
+  - Runtime activation is still multiplied by the quantized weight.
+  - The path dequantizes W4 to a dense torch weight and runs torch
+    `F.linear`.
 
 - `RealQuant`
   - Same converted QuantVLA GPTQ-like `qweight/scales`.
@@ -382,3 +384,91 @@ Fallback FP16 layers: 0
 If RealQuant reports unreplaced DiT MLP layers, the likely reason is a
 GPTQ-Marlin shape/layout constraint for those particular action-head Linear
 layers. FakeQuant should still validate the converted weights and transforms.
+
+## DiT MLP Up-Projection Activation Probe
+
+To inspect whether FakeQuant and RealQuant produce similar DiT MLP activation
+distributions, enable the DiT MLP probe before starting the server.
+
+The probe registers forward hooks on:
+
+```text
+action_head.model.transformer_blocks.*.ff.net.0.proj
+```
+
+This is the MLP up-projection output. During each `get_action`, GR00T runs a
+denoising loop. The probe records the selected denoising iterations, defaulting
+to first, middle, and last:
+
+```text
+iter 0, iter num_steps//2, iter num_steps-1
+```
+
+For each selected layer/iteration it reduces the output tensor over batch and
+sequence dimensions, bins the channel dimension, and records channel-bin
+statistics:
+
+- `mean`
+- `abs_mean`
+- `std`
+- `rms`
+- `min`
+- `max`
+
+Example RealQuant run with the probe:
+
+```bash
+cd /home/hohyeon/private/vlatest
+export GR00T_DIT_MLP_PROBE=1
+export GR00T_DIT_MLP_PROBE_DIR=/tmp/logs/dit_mlp_probe_real_goal
+export GR00T_DIT_MLP_PROBE_BINS=128
+export GR00T_DIT_MLP_PROBE_ITERS=first,mid,last
+
+CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh real libero_goal 5556
+```
+
+Evaluator:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash run_libero_eval.sh libero_goal --headless --port 5556 --result-tag real_probe
+```
+
+Example FakeQuant run:
+
+```bash
+cd /home/hohyeon/private/vlatest
+export GR00T_DIT_MLP_PROBE=1
+export GR00T_DIT_MLP_PROBE_DIR=/tmp/logs/dit_mlp_probe_fake_goal
+export GR00T_DIT_MLP_PROBE_BINS=128
+export GR00T_DIT_MLP_PROBE_ITERS=first,mid,last
+
+CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh fake libero_goal 5556
+```
+
+Evaluator:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash run_libero_eval.sh libero_goal --headless --port 5556 --result-tag fake_probe
+```
+
+The probe writes CSV files such as:
+
+```text
+/tmp/logs/dit_mlp_probe_real_goal/dit_mlp_up_probe_real_libero_goal.csv
+/tmp/logs/dit_mlp_probe_fake_goal/dit_mlp_up_probe_fake_libero_goal.csv
+```
+
+Build heatmap plots:
+
+```bash
+python vlaconvert_tools/plot_dit_mlp_probe.py \
+  /tmp/logs/dit_mlp_probe_fake_goal/dit_mlp_up_probe_fake_libero_goal.csv \
+  /tmp/logs/dit_mlp_probe_real_goal/dit_mlp_up_probe_real_libero_goal.csv \
+  --metric abs_mean \
+  --output /tmp/logs/dit_mlp_probe_goal_abs_mean.html
+```
+
+The HTML report shows one heatmap per mode and a Real-Fake percent-difference
+heatmap when both modes are provided. Rows are `DiT layer x denoising
+iteration`, columns are channel bins. Use `abs_mean` or `rms` to inspect
+activation magnitude drift across first/middle/last denoising iterations.
