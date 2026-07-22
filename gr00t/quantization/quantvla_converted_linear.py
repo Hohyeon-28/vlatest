@@ -34,6 +34,7 @@ from dataclasses import asdict, dataclass, field
 
 
 GPTQ_QUANT_MODE_FAKE = "fake"
+GPTQ_QUANT_MODE_FAKE_W4A8 = "fake_w4a8"
 GPTQ_QUANT_MODE_REAL = "real"
 
 
@@ -104,6 +105,7 @@ class ConvertedLayerPack:
     scales: torch.Tensor
     qzeros: torch.Tensor | None
     bias: torch.Tensor | None
+    prepack_w4_weight: torch.Tensor | None
     layer_info: dict[str, Any]
     transform_pack: QuantVLAPack
 
@@ -133,6 +135,16 @@ def dtype_from_name(name: str) -> torch.dtype:
     if value in ("fp32", "float32"):
         return torch.float32
     raise ValueError(f"Unsupported dtype: {name}")
+
+
+def _fake_quantize_activation(x: torch.Tensor, bits: int = 8) -> torch.Tensor:
+    if bits <= 0:
+        return x
+    max_q = (1 << (bits - 1)) - 1
+    min_q = -(1 << (bits - 1))
+    scale = torch.amax(torch.abs(x), dim=-1, keepdim=True).clamp_min(1e-8) / max_q
+    q = torch.round(x / scale).clamp(min_q, max_q)
+    return q * scale
 
 
 def _load_json(path: Path) -> Any:
@@ -193,6 +205,7 @@ class ConvertedQuantVLACheckpoint:
         scales_key = f"{prefix}.scales"
         qzeros_key = f"{prefix}.qzeros"
         bias_key = f"{prefix}.bias"
+        prepack_w4_key = f"{prefix}.w4_prepack_dequant_weight"
         if qweight_key not in self.tensors or scales_key not in self.tensors:
             raise KeyError(f"Missing qweight/scales tensors for {prefix}")
         return ConvertedLayerPack(
@@ -201,6 +214,7 @@ class ConvertedQuantVLACheckpoint:
             scales=self.tensors[scales_key],
             qzeros=self.tensors.get(qzeros_key),
             bias=self.tensors.get(bias_key),
+            prepack_w4_weight=self.tensors.get(prepack_w4_key),
             layer_info=info,
             transform_pack=_pack_from_transform_arrays(info, self.transforms),
         )
@@ -217,7 +231,24 @@ class QuantVLAFakeQuantLinear(nn.Module):
         self.group_size = pack.group_size
         self.row_rot_mode = pack.row_rot_mode
         self.transform_pack = pack.transform_pack
-        weight = dequantize_gptq_like(pack.qweight, pack.scales.to(torch.float32), self.in_features, self.group_size)
+        weight_source = os.environ.get("QUANTVLA_FAKE_WEIGHT_SOURCE", "packed").strip().lower()
+        if weight_source == "prepack":
+            if pack.prepack_w4_weight is None:
+                raise ValueError(
+                    f"{pack.prefix} has no prepack W4 dense reference. "
+                    "Re-run conversion with QUANTVLA_SAVE_PREPACK_W4=1."
+                )
+            weight = pack.prepack_w4_weight.to(torch.float32)
+        elif weight_source in ("packed", "qweight", "gptq"):
+            weight = dequantize_gptq_like(
+                pack.qweight,
+                pack.scales.to(torch.float32),
+                self.in_features,
+                self.group_size,
+            )
+        else:
+            raise ValueError("QUANTVLA_FAKE_WEIGHT_SOURCE must be 'packed' or 'prepack'")
+        self.weight_source = weight_source
         self.register_buffer("weight", weight.to(dtype=dtype).contiguous(), persistent=False)
         if pack.bias is None:
             self.bias = None
@@ -227,6 +258,23 @@ class QuantVLAFakeQuantLinear(nn.Module):
     @torch.inference_mode()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         work = apply_quantvla_input_transform(x.to(torch.float32), self.transform_pack)
+        out = F.linear(work.to(dtype=self.weight.dtype), self.weight, self.bias)
+        if self.row_rot_mode == "restore":
+            out = apply_quantvla_output_restore(out.to(torch.float32), self.transform_pack).to(dtype=self.weight.dtype)
+        return out
+
+
+class QuantVLAFakeQuantW4A8Linear(QuantVLAFakeQuantLinear):
+    """FakeQuant W4A8 path: W4 dense reference plus dynamic INT8 activation fake quant."""
+
+    def __init__(self, pack: ConvertedLayerPack, dtype: torch.dtype = torch.bfloat16) -> None:
+        super().__init__(pack, dtype=dtype)
+        self.activation_bits = int(os.environ.get("QUANTVLA_FAKE_ACT_BITS", "8"))
+
+    @torch.inference_mode()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        work = apply_quantvla_input_transform(x.to(torch.float32), self.transform_pack)
+        work = _fake_quantize_activation(work, self.activation_bits)
         out = F.linear(work.to(dtype=self.weight.dtype), self.weight, self.bias)
         if self.row_rot_mode == "restore":
             out = apply_quantvla_output_restore(out.to(torch.float32), self.transform_pack).to(dtype=self.weight.dtype)
@@ -367,7 +415,8 @@ class QuantVLAPairedRealFakeLinear(nn.Module):
 
 def mode_definitions() -> dict[str, str]:
     return {
-        GPTQ_QUANT_MODE_FAKE: "QuantVLA-converted GPTQ-like qweight/scales -> dense dequant -> torch F.linear",
+        GPTQ_QUANT_MODE_FAKE: "QuantVLA-converted W4 qweight/scales -> dense dequant -> torch F.linear; activations stay BF16/FP16",
+        GPTQ_QUANT_MODE_FAKE_W4A8: "same W4 dense FakeQuant path plus dynamic signed INT8 activation fake quantization",
         GPTQ_QUANT_MODE_REAL: "same qweight/scales -> vLLM GPTQ-Marlin Linear; QuantVLA transforms preserved",
     }
 
@@ -439,12 +488,17 @@ def normalize_quantvla_converted_mode(mode: str | None) -> str:
         "gptq_marlin": GPTQ_QUANT_MODE_REAL,
         "fake": GPTQ_QUANT_MODE_FAKE,
         "fake_quant": GPTQ_QUANT_MODE_FAKE,
+        "fake_w4a16": GPTQ_QUANT_MODE_FAKE,
+        "w4a16": GPTQ_QUANT_MODE_FAKE,
         "torch": GPTQ_QUANT_MODE_FAKE,
         "dequant": GPTQ_QUANT_MODE_FAKE,
         "dequant_torch": GPTQ_QUANT_MODE_FAKE,
+        "fake_w4a8": GPTQ_QUANT_MODE_FAKE_W4A8,
+        "w4a8": GPTQ_QUANT_MODE_FAKE_W4A8,
+        "torch_w4a8": GPTQ_QUANT_MODE_FAKE_W4A8,
     }
     if value not in aliases:
-        raise ValueError(f"Unsupported QUANTVLA_CONVERTED_MODE={mode!r}; use real or fake")
+        raise ValueError(f"Unsupported QUANTVLA_CONVERTED_MODE={mode!r}; use real, fake, or fake_w4a8")
     return aliases[value]
 
 
@@ -532,6 +586,8 @@ def replace_quantvla_converted_linears(
                     wrapper = QuantVLAPairedRealFakeLinear(pack, dtype=dtype)
                 else:
                     wrapper = QuantVLARealQuantMarlinLinear(pack, dtype=dtype)
+            elif mode == GPTQ_QUANT_MODE_FAKE_W4A8:
+                wrapper = QuantVLAFakeQuantW4A8Linear(pack, dtype=dtype)
             else:
                 wrapper = QuantVLAFakeQuantLinear(pack, dtype=dtype)
         except Exception as exc:

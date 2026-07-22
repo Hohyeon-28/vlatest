@@ -147,6 +147,11 @@ def main() -> None:
     parser.add_argument("--scale-source", choices=["mse", "pack", "maxabs"], default="mse")
     parser.add_argument("--row-rot-mode", choices=["restore", "propagate", "0"], default="restore")
     parser.add_argument("--save-bias", choices=["none", "original"], default="none")
+    parser.add_argument(
+        "--save-prepack-w4",
+        action="store_true",
+        help="Also save dense q_signed*scale W4 weights before GPTQ-like INT4 packing for FakeQuant reference runs.",
+    )
     parser.add_argument("--max-layers", type=int, default=0, help="Debug limit. 0 means all matching layers.")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json-report", default=None)
@@ -236,6 +241,8 @@ def main() -> None:
         output_tensors[f"{out_prefix}.qweight"] = qweight.cpu()
         output_tensors[f"{out_prefix}.scales"] = scales.cpu()
         output_tensors[f"{out_prefix}.qzeros"] = qzeros.cpu()
+        if args.save_prepack_w4:
+            output_tensors[f"{out_prefix}.w4_prepack_dequant_weight"] = quant_ref.to(torch.float16).cpu()
         if args.save_bias == "original":
             bias_key = weight_key[: -len(".weight")] + ".bias"
             if bias_key in dense_tensors:
@@ -293,8 +300,9 @@ def main() -> None:
         "skipped_by_regex": len(skipped),
         "fallback_fp16_layers": 0,
         "conversion_kind": "quantvla_transformed_weight_to_gptq_like_int4",
-        "direct_gptq_marlin_compatible_input": False,
-        "requires_transform_aware_runtime": any(
+            "direct_gptq_marlin_compatible_input": False,
+            "saved_prepack_w4_dense_reference": bool(args.save_prepack_w4),
+            "requires_transform_aware_runtime": any(
             item["has_input_transform"] or item["has_output_restore"] for item in layers
         ),
         "layers": layers,

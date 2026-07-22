@@ -81,7 +81,13 @@ echo "Pack dir:        $PACK_DIR"
 echo "Output:          $OUTPUT_DIR"
 echo "Scope:           LLM + DiT MLP"
 echo "Bits/group:      W4, group_size=${GPTQ_GROUP_SIZE:-128}"
+echo "Save prepack W4: ${QUANTVLA_SAVE_PREPACK_W4:-0}"
 echo "=========================================="
+
+EXTRA_ARGS=()
+if [[ "${QUANTVLA_SAVE_PREPACK_W4:-0}" != "0" ]]; then
+    EXTRA_ARGS+=(--save-prepack-w4)
+fi
 
 python vlaconvert_tools/convert_quantvla_to_gptq_like.py \
     --base-checkpoint "$BASE_CHECKPOINT" \
@@ -90,7 +96,8 @@ python vlaconvert_tools/convert_quantvla_to_gptq_like.py \
     --bits 4 \
     --group-size "${GPTQ_GROUP_SIZE:-128}" \
     --scale-source "${QUANTVLA_SCALE_SOURCE:-mse}" \
-    --row-rot-mode "${QUANTVLA_ROW_ROT_MODE:-restore}"
+    --row-rot-mode "${QUANTVLA_ROW_ROT_MODE:-restore}" \
+    "${EXTRA_ARGS[@]}"
 
 echo ""
 echo "Done. Converted checkpoint is at: $OUTPUT_DIR"
