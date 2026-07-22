@@ -11,6 +11,26 @@ import numpy as np
 import torch
 import tqdm
 import tyro
+
+
+_ORIGINAL_TORCH_LOAD = torch.load
+
+
+def _torch_load_libero_init_state_compat(*args, **kwargs):
+    """Allow trusted LIBERO init-state pickle files on PyTorch 2.6+."""
+    if "weights_only" not in kwargs and args:
+        try:
+            load_path = os.fspath(args[0])
+        except TypeError:
+            load_path = ""
+        normalized_path = load_path.replace("\\", "/")
+        if "/LIBERO/" in normalized_path or "/init_files/" in normalized_path:
+            kwargs["weights_only"] = False
+    return _ORIGINAL_TORCH_LOAD(*args, **kwargs)
+
+
+torch.load = _torch_load_libero_init_state_compat
+
 from libero.libero import benchmark
 
 from examples.Libero.eval.utils import (
