@@ -48,6 +48,23 @@ elif [[ -d "$HOME/private/LIBERO" ]]; then
     export PYTHONPATH="$HOME/private/LIBERO:$PYTHONPATH"
 fi
 
+# LIBERO asks for a dataset path during import when ~/.libero/config.yaml is
+# missing. Background eval jobs have no stdin, so create the same config up
+# front and keep the eval fully non-interactive.
+LIBERO_CHECKOUT="${LIBERO_ROOT:-$HOME/private/LIBERO}"
+LIBERO_CONFIG="${LIBERO_CONFIG:-$HOME/.libero/config.yaml}"
+LIBERO_DATASET_DIR="${LIBERO_DATASET_DIR:-$LIBERO_CHECKOUT/datasets}"
+if [[ -d "$LIBERO_CHECKOUT/libero/libero" && ! -f "$LIBERO_CONFIG" ]]; then
+    mkdir -p "$(dirname "$LIBERO_CONFIG")"
+    cat >"$LIBERO_CONFIG" <<EOF
+benchmark_root: $LIBERO_CHECKOUT/libero/libero
+bddl_files: $LIBERO_CHECKOUT/libero/libero/bddl_files
+init_states: $LIBERO_CHECKOUT/libero/libero/init_files
+datasets: $LIBERO_DATASET_DIR
+assets: $LIBERO_CHECKOUT/libero/libero/assets
+EOF
+fi
+
 echo "=========================================="
 echo "Running Libero evaluation for $TASK"
 echo "Headless mode: $HEADLESS_FLAG"
