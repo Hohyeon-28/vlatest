@@ -108,6 +108,12 @@ echo "Data config: $DATA_CONFIG"
 echo "Port: $PORT"
 echo "Report: $REPORT"
 echo "GR00T timing: $GR00T_TIMING"
+if [[ "$MODE" == fake* ]]; then
+    echo "Fake weight source: ${QUANTVLA_FAKE_WEIGHT_SOURCE:-raw_w4}"
+fi
+if [[ "$MODE" == "fake_w4a8" ]]; then
+    echo "Fake activation bits: ${QUANTVLA_FAKE_ACT_BITS:-8}"
+fi
 echo "=========================================="
 
 python scripts/inference_service.py \

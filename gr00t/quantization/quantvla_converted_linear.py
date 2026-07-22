@@ -2,10 +2,11 @@
 
 Definitions used here:
 
-- FakeQuant: converted QuantVLA GPTQ-like qweight/scales are dequantized once
-  into a dense torch weight, then executed with torch.nn.functional.linear.
-- RealQuant: the same qweight/scales are executed by vLLM's GPTQ-Marlin Linear
-  path. QuantVLA input/output transforms are preserved around the matmul.
+- FakeQuant: raw W4 dense reference weights, saved before GPTQ-like packing,
+  are executed with torch.nn.functional.linear.
+- RealQuant: the same W4 codes/scales are executed after GPTQ-like packing by
+  vLLM's GPTQ-Marlin Linear path.
+- QuantVLA input/output transforms are preserved around both paths.
 """
 
 from __future__ import annotations
@@ -105,7 +106,7 @@ class ConvertedLayerPack:
     scales: torch.Tensor
     qzeros: torch.Tensor | None
     bias: torch.Tensor | None
-    prepack_w4_weight: torch.Tensor | None
+    raw_w4_weight: torch.Tensor | None
     layer_info: dict[str, Any]
     transform_pack: QuantVLAPack
 
@@ -205,6 +206,7 @@ class ConvertedQuantVLACheckpoint:
         scales_key = f"{prefix}.scales"
         qzeros_key = f"{prefix}.qzeros"
         bias_key = f"{prefix}.bias"
+        raw_w4_key = f"{prefix}.w4_raw_dequant_weight"
         prepack_w4_key = f"{prefix}.w4_prepack_dequant_weight"
         if qweight_key not in self.tensors or scales_key not in self.tensors:
             raise KeyError(f"Missing qweight/scales tensors for {prefix}")
@@ -214,14 +216,14 @@ class ConvertedQuantVLACheckpoint:
             scales=self.tensors[scales_key],
             qzeros=self.tensors.get(qzeros_key),
             bias=self.tensors.get(bias_key),
-            prepack_w4_weight=self.tensors.get(prepack_w4_key),
+            raw_w4_weight=self.tensors.get(raw_w4_key, self.tensors.get(prepack_w4_key)),
             layer_info=info,
             transform_pack=_pack_from_transform_arrays(info, self.transforms),
         )
 
 
 class QuantVLAFakeQuantLinear(nn.Module):
-    """FakeQuant/reference path: same W4 tensors, dense torch F.linear."""
+    """FakeQuant/reference path: raw W4 dense reference, torch F.linear."""
 
     def __init__(self, pack: ConvertedLayerPack, dtype: torch.dtype = torch.bfloat16) -> None:
         super().__init__()
@@ -231,14 +233,15 @@ class QuantVLAFakeQuantLinear(nn.Module):
         self.group_size = pack.group_size
         self.row_rot_mode = pack.row_rot_mode
         self.transform_pack = pack.transform_pack
-        weight_source = os.environ.get("QUANTVLA_FAKE_WEIGHT_SOURCE", "packed").strip().lower()
-        if weight_source == "prepack":
-            if pack.prepack_w4_weight is None:
+        weight_source = os.environ.get("QUANTVLA_FAKE_WEIGHT_SOURCE", "raw_w4").strip().lower()
+        if weight_source in ("raw", "raw_w4", "prepack"):
+            if pack.raw_w4_weight is None:
                 raise ValueError(
-                    f"{pack.prefix} has no prepack W4 dense reference. "
-                    "Re-run conversion with QUANTVLA_SAVE_PREPACK_W4=1."
+                    f"{pack.prefix} has no raw W4 dense reference. "
+                    "Re-run conversion with QUANTVLA_SAVE_RAW_W4=1 or QUANTVLA_SAVE_PREPACK_W4=1."
                 )
-            weight = pack.prepack_w4_weight.to(torch.float32)
+            weight = pack.raw_w4_weight.to(torch.float32)
+            weight_source = "raw_w4"
         elif weight_source in ("packed", "qweight", "gptq"):
             weight = dequantize_gptq_like(
                 pack.qweight,
@@ -246,8 +249,9 @@ class QuantVLAFakeQuantLinear(nn.Module):
                 self.in_features,
                 self.group_size,
             )
+            weight_source = "packed"
         else:
-            raise ValueError("QUANTVLA_FAKE_WEIGHT_SOURCE must be 'packed' or 'prepack'")
+            raise ValueError("QUANTVLA_FAKE_WEIGHT_SOURCE must be 'raw_w4' or 'packed'")
         self.weight_source = weight_source
         self.register_buffer("weight", weight.to(dtype=dtype).contiguous(), persistent=False)
         if pack.bias is None:
@@ -415,8 +419,8 @@ class QuantVLAPairedRealFakeLinear(nn.Module):
 
 def mode_definitions() -> dict[str, str]:
     return {
-        GPTQ_QUANT_MODE_FAKE: "QuantVLA-converted W4 qweight/scales -> dense dequant -> torch F.linear; activations stay BF16/FP16",
-        GPTQ_QUANT_MODE_FAKE_W4A8: "same W4 dense FakeQuant path plus dynamic signed INT8 activation fake quantization",
+        GPTQ_QUANT_MODE_FAKE: "raw W4 dense reference saved before GPTQ-like packing -> torch F.linear; activations stay BF16/FP16",
+        GPTQ_QUANT_MODE_FAKE_W4A8: "raw W4 dense reference plus dynamic signed INT8 activation fake quantization -> torch F.linear",
         GPTQ_QUANT_MODE_REAL: "same qweight/scales -> vLLM GPTQ-Marlin Linear; QuantVLA transforms preserved",
     }
 
@@ -634,6 +638,10 @@ def enable_quantvla_converted_if_configured(model: nn.Module) -> QuantVLAConvert
     print("[QuantVLA-CONVERTED] checkpoint:", checkpoint)
     print("[QuantVLA-CONVERTED] include:", include)
     print("[QuantVLA-CONVERTED] exclude:", exclude)
+    if mode in (GPTQ_QUANT_MODE_FAKE, GPTQ_QUANT_MODE_FAKE_W4A8):
+        print("[QuantVLA-CONVERTED] fake weight source:", os.environ.get("QUANTVLA_FAKE_WEIGHT_SOURCE", "raw_w4"))
+    if mode == GPTQ_QUANT_MODE_FAKE_W4A8:
+        print("[QuantVLA-CONVERTED] fake activation bits:", os.environ.get("QUANTVLA_FAKE_ACT_BITS", "8"))
     report = replace_quantvla_converted_linears(
         model,
         checkpoint,

@@ -354,35 +354,48 @@ The converted runtime supports three execution modes:
 
 | Mode | Weight path | Activation path | Kernel path |
 |---|---|---|---|
-| `fake` / `fake_w4a16` | W4 qweight/scales dequantized to dense torch weight | BF16/FP16 | torch `F.linear` |
-| `fake_w4a8` | same W4 dense reference | dynamic signed INT8 fake quant/dequant per input token | torch `F.linear` |
-| `real` | same W4 qweight/scales | BF16/FP16 | vLLM GPTQ-Marlin |
+| `fake` / `fake_w4a16` | raw W4 dense reference, saved before GPTQ-like packing | BF16/FP16 | torch `F.linear` |
+| `fake_w4a8` | raw W4 dense reference, saved before GPTQ-like packing | dynamic signed INT8 fake quant/dequant per input token | torch `F.linear` |
+| `real` | GPTQ-like packed W4 qweight/scales | BF16/FP16 | vLLM GPTQ-Marlin |
 
-By default, FakeQuant uses the GPTQ-like packed qweight and dequantizes it once.
-If you want a reference based on the W4 tensor before GPTQ-like packing, re-run
-conversion with:
+For DiT, this does not replace the whole action head with a vLLM model runtime.
+Only the target DiT MLP `nn.Linear` modules are replaced by vLLM
+GPTQ-Marlin-backed Linear wrappers. The original GR00T DiT control flow,
+denoising loop, and action head structure stay unchanged.
+
+Here, `raw W4` means `Q4(WT) * scale`, where `WT` is the QuantVLA/DuQuant
+transformed dense weight. It is still a QuantVLA-transformed W4 weight, but it
+has not gone through GPTQ-like packing/unpacking.
+
+By default, conversion saves the raw W4 dense reference. If you disabled it,
+re-run conversion with:
 
 ```bash
-QUANTVLA_SAVE_PREPACK_W4=1 bash run_quantvla_convert_full.sh libero_goal
+QUANTVLA_SAVE_RAW_W4=1 bash run_quantvla_convert_full.sh libero_goal
 ```
 
-Then run fake modes with:
+Then run W4A16 FakeQuant:
 
 ```bash
-export QUANTVLA_FAKE_WEIGHT_SOURCE=prepack
 CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh fake libero_goal 5556
 ```
 
 W4A8 FakeQuant:
 
 ```bash
-export QUANTVLA_FAKE_WEIGHT_SOURCE=prepack  # optional; use packed qweight if unset
 export QUANTVLA_FAKE_ACT_BITS=8
 CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh fake_w4a8 libero_goal 5556
 ```
 
 `fake_w4a8` is a fake-quantized reference path, not a Marlin W4A8 kernel path:
 the activations are quantized/dequantized in torch before the dense matmul.
+
+For debugging only, you can force the older packed-qweight dequantized FakeQuant
+weight path:
+
+```bash
+export QUANTVLA_FAKE_WEIGHT_SOURCE=packed
+```
 
 ---
 

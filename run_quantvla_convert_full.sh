@@ -81,12 +81,13 @@ echo "Pack dir:        $PACK_DIR"
 echo "Output:          $OUTPUT_DIR"
 echo "Scope:           LLM + DiT MLP"
 echo "Bits/group:      W4, group_size=${GPTQ_GROUP_SIZE:-128}"
-echo "Save prepack W4: ${QUANTVLA_SAVE_PREPACK_W4:-0}"
+SAVE_RAW_W4="${QUANTVLA_SAVE_RAW_W4:-${QUANTVLA_SAVE_PREPACK_W4:-1}}"
+echo "Save raw W4:     $SAVE_RAW_W4"
 echo "=========================================="
 
 EXTRA_ARGS=()
-if [[ "${QUANTVLA_SAVE_PREPACK_W4:-0}" != "0" ]]; then
-    EXTRA_ARGS+=(--save-prepack-w4)
+if [[ "$SAVE_RAW_W4" != "0" ]]; then
+    EXTRA_ARGS+=(--save-raw-w4)
 fi
 
 python vlaconvert_tools/convert_quantvla_to_gptq_like.py \
