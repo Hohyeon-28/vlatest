@@ -20,6 +20,7 @@ RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 BASE_RESULT_DIR="${VLA_RESULTS_DIR:-/tmp/logs/vlatest_runs/$RUN_ID}"
 READY_TIMEOUT_SEC="${READY_TIMEOUT_SEC:-900}"
 SERVER_READY_PATTERN="${SERVER_READY_PATTERN:-Server is ready}"
+SERVER_START_MODE="${SERVER_START_MODE:-sequential}"
 
 mkdir -p "$BASE_RESULT_DIR"
 
@@ -161,9 +162,22 @@ echo "Batch: $BATCH"
 echo "RUN_ID: $RUN_ID"
 echo "Results root: $BASE_RESULT_DIR"
 echo "DiT active probe: $probe_kind"
+echo "Server start mode: $SERVER_START_MODE"
 echo
 
-while IFS=: read -r mode suite gpu port; do
+start_server_spec() {
+    local mode="$1"
+    local suite="$2"
+    local gpu="$3"
+    local port="$4"
+    local label
+    local tag
+    local ckpt
+    local job_dir
+    local server_log
+    local report
+    local pid
+
     label="$(mode_label "$mode")"
     tag="${label}_${suite}"
     ckpt="$(checkpoint_for_suite "$suite")"
@@ -194,13 +208,41 @@ while IFS=: read -r mode suite gpu port; do
         bash "$SCRIPT_DIR/run_quantvla_converted_server.sh" "$mode" "$suite" "$ckpt" "$port"
     ) >"$server_log" 2>&1 &
 
-    pids+=("$!")
+    pid="$!"
+    pids+=("$pid")
     logs+=("$server_log")
     tags+=("$tag")
+
+    if [[ "$SERVER_START_MODE" == "sequential" ]]; then
+        wait_for_server "$pid" "$server_log" "$tag"
+    fi
+}
+
+case "$SERVER_START_MODE" in
+    sequential|parallel)
+        ;;
+    *)
+        echo "Unknown SERVER_START_MODE=$SERVER_START_MODE; use sequential or parallel" >&2
+        exit 2
+        ;;
+esac
+
+while IFS=: read -r mode suite gpu port; do
+    start_server_spec "$mode" "$suite" "$gpu" "$port"
 done < <(specs_for_batch)
 
+if [[ "$SERVER_START_MODE" == "parallel" ]]; then
+    for i in "${!pids[@]}"; do
+        wait_for_server "${pids[$i]}" "${logs[$i]}" "${tags[$i]}"
+    done
+fi
+
 for i in "${!pids[@]}"; do
-    wait_for_server "${pids[$i]}" "${logs[$i]}" "${tags[$i]}"
+    if ! kill -0 "${pids[$i]}" 2>/dev/null; then
+        echo "[${tags[$i]}] server exited after readiness check. Last log lines:" >&2
+        tail -n 80 "${logs[$i]}" >&2 || true
+        exit 1
+    fi
 done
 
 echo

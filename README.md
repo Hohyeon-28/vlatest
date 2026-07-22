@@ -427,6 +427,10 @@ RUN_ID=long_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh long
 bash run_vlatest_evals_only.sh long long_YYYYMMDD_HHMMSS
 ```
 
+Server batches start suites sequentially by default. This avoids loading three
+large GR00T checkpoints and converted checkpoints at exactly the same time. To
+force the old all-at-once behavior, set `SERVER_START_MODE=parallel`.
+
 `run_vlatest_experiment_matrix.sh` remains available when you want one command
 to start a server, run eval, and stop the server automatically.
 
