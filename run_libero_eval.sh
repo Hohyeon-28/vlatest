@@ -41,6 +41,7 @@ fi
 
 # Add this GR00T checkout and optional LIBERO checkout to Python path.
 export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 if [[ -n "${LIBERO_ROOT:-}" ]]; then
     export PYTHONPATH="$LIBERO_ROOT:$PYTHONPATH"
 elif [[ -d "$HOME/private/LIBERO" ]]; then
@@ -74,7 +75,7 @@ echo ""
 
 cd "$SCRIPT_DIR/examples/Libero/eval"
 
-CMD=(python run_libero_eval.py --task_suite_name "$TASK")
+CMD=(python -u run_libero_eval.py --task_suite_name "$TASK")
 if [[ "$HAS_PORT" == "no" ]]; then
     CMD+=(--port "$PORT_VALUE")
 fi

@@ -97,6 +97,7 @@ export QUANTVLA_CONVERTED_STRICT="${QUANTVLA_CONVERTED_STRICT:-1}"
 export QUANTVLA_CONVERTED_DTYPE="${QUANTVLA_CONVERTED_DTYPE:-bfloat16}"
 export GR00T_DIT_MLP_PROBE_DENOISING_STEPS="$DENOISING_STEPS"
 export GR00T_TIMING="${GR00T_TIMING:-1}"
+export PYTHONUNBUFFERED="${PYTHONUNBUFFERED:-1}"
 
 echo "=========================================="
 echo "Starting QuantVLA-converted LIBERO server"
@@ -116,7 +117,7 @@ if [[ "$MODE" == "fake_w4a8" ]]; then
 fi
 echo "=========================================="
 
-python scripts/inference_service.py \
+python -u scripts/inference_service.py \
     --model_path "$MODEL_PATH" \
     --server \
     --data_config "$DATA_CONFIG" \
