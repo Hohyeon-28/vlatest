@@ -116,6 +116,32 @@ validate_batch() {
     esac
 }
 
+kill_process_tree() {
+    local pid="${1:-}"
+    local signal="${2:-TERM}"
+    local child
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        kill_process_tree "$child" "$signal"
+    done
+    kill -"$signal" "$pid" 2>/dev/null || true
+}
+
+stop_server_tree() {
+    local pid="${1:-}"
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    kill_process_tree "$pid" TERM
+    sleep 2
+    if kill -0 "$pid" 2>/dev/null; then
+        kill_process_tree "$pid" KILL
+    fi
+    wait "$pid" 2>/dev/null || true
+}
+
 pids=()
 logs=()
 tags=()
@@ -123,10 +149,7 @@ tags=()
 cleanup() {
     local pid
     for pid in "${pids[@]:-}"; do
-        if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-        fi
+        stop_server_tree "$pid"
     done
 }
 trap cleanup EXIT INT TERM

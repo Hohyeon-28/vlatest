@@ -70,6 +70,32 @@ wait_for_server() {
     return 1
 }
 
+kill_process_tree() {
+    local pid="${1:-}"
+    local signal="${2:-TERM}"
+    local child
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        kill_process_tree "$child" "$signal"
+    done
+    kill -"$signal" "$pid" 2>/dev/null || true
+}
+
+stop_server_tree() {
+    local pid="${1:-}"
+    if [[ -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; then
+        return 0
+    fi
+    kill_process_tree "$pid" TERM
+    sleep 2
+    if kill -0 "$pid" 2>/dev/null; then
+        kill_process_tree "$pid" KILL
+    fi
+    wait "$pid" 2>/dev/null || true
+}
+
 run_one_job() (
     set -euo pipefail
 
@@ -116,10 +142,7 @@ run_one_job() (
     fi
 
     cleanup() {
-        if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
-            kill "$server_pid" 2>/dev/null || true
-            wait "$server_pid" 2>/dev/null || true
-        fi
+        stop_server_tree "$server_pid"
     }
     trap cleanup EXIT INT TERM
 

@@ -399,10 +399,36 @@ export QUANTVLA_FAKE_WEIGHT_SOURCE=packed
 
 ### Batched Experiment Runner
 
-Use `run_vlatest_experiment_matrix.sh` to avoid manually opening and closing
-many servers. It starts each server with a unique GPU, port, result tag, report,
-and result directory, then shuts the server down after the matching LIBERO eval
-finishes.
+For the most stable workflow, run servers and evals from separate terminals.
+The server terminal owns the inference processes, and the eval terminal only
+connects to the matching ports. This makes it easier to inspect logs and stop
+servers cleanly.
+
+Stop any stale servers before starting a new batch:
+
+```bash
+bash run_vlatest_stop_servers.sh
+```
+
+Start a server batch in terminal A. The script prints the `RUN_ID`; pass the
+same value to the eval command in terminal B:
+
+```bash
+RUN_ID=short_fake_w4a8_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_fake_w4a8
+bash run_vlatest_evals_only.sh short_fake_w4a8 short_fake_w4a8_YYYYMMDD_HHMMSS
+
+RUN_ID=short_real_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_real
+bash run_vlatest_evals_only.sh short_real short_real_YYYYMMDD_HHMMSS
+
+RUN_ID=short_fake_w4a16_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_fake_w4a16
+bash run_vlatest_evals_only.sh short_fake_w4a16 short_fake_w4a16_YYYYMMDD_HHMMSS
+
+RUN_ID=long_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh long
+bash run_vlatest_evals_only.sh long long_YYYYMMDD_HHMMSS
+```
+
+`run_vlatest_experiment_matrix.sh` remains available when you want one command
+to start a server, run eval, and stop the server automatically.
 
 By default, the matrix also records the active DiT MLP distribution for the
 policy that is actually running in that job. This is different from the paired
@@ -449,24 +475,6 @@ bash run_vlatest_experiment_matrix.sh long
 | exp1 `fake_w4a8` | libero_10 | 0 | 5556 |
 | exp2 `real` / GPTQ-Marlin | libero_10 | 1 | 5557 |
 | exp3 `fake_w4a16` | libero_10 | 2 | 5558 |
-
-If you want to keep server terminals open and launch evals from a separate
-terminal, use the split scripts. The server script prints the `RUN_ID`; pass the
-same value to the eval script:
-
-```bash
-RUN_ID=short_fake_w4a8_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_fake_w4a8
-bash run_vlatest_evals_only.sh short_fake_w4a8 short_fake_w4a8_YYYYMMDD_HHMMSS
-
-RUN_ID=short_real_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_real
-bash run_vlatest_evals_only.sh short_real short_real_YYYYMMDD_HHMMSS
-
-RUN_ID=short_fake_w4a16_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_fake_w4a16
-bash run_vlatest_evals_only.sh short_fake_w4a16 short_fake_w4a16_YYYYMMDD_HHMMSS
-
-RUN_ID=long_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh long
-bash run_vlatest_evals_only.sh long long_YYYYMMDD_HHMMSS
-```
 
 DiT paired probes remain available as a separate diagnostic. Use them only when
 you specifically need Real and Fake outputs computed from the exact same DiT
