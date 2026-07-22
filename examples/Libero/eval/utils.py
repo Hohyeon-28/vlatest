@@ -73,11 +73,25 @@ def save_rollout_video(
         f"{rollout_dir}/{DATE_TIME}{tag_part}--episode={idx}--success={success}"
         f"--task={processed_task_description}.mp4"
     )
-    video_writer = imageio.get_writer(mp4_path, fps=30)
-    for img1, img2 in zip(top_view, wrist_view):
-        combined = np.hstack((img1, img2))
-        video_writer.append_data(combined)
-    video_writer.close()
+    video_writer = None
+    try:
+        video_writer = imageio.get_writer(
+            mp4_path,
+            fps=30,
+            codec=os.environ.get("LIBERO_VIDEO_CODEC", "libx264"),
+            macro_block_size=1,
+        )
+        for img1, img2 in zip(top_view, wrist_view):
+            combined = np.hstack((img1, img2))
+            video_writer.append_data(combined)
+    except Exception as exc:
+        print(f"[warning] Failed to save rollout MP4 at path {mp4_path}: {exc}")
+        if log_file is not None:
+            log_file.write(f"[warning] Failed to save rollout MP4 at path {mp4_path}: {exc}\n")
+        return None
+    finally:
+        if video_writer is not None:
+            video_writer.close()
     print(f"Saved rollout MP4 at path {mp4_path}")
     if log_file is not None:
         log_file.write(f"Saved rollout MP4 at path {mp4_path}\n")
