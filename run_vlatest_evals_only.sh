@@ -181,6 +181,7 @@ run_eval_job() (
 )
 
 pids=()
+eval_logs=()
 
 echo "Batch: $BATCH"
 echo "RUN_ID: $RUN_ID"
@@ -194,6 +195,8 @@ done < <(specs_for_batch)
 while IFS=: read -r mode suite gpu port; do
     run_eval_job "$mode" "$suite" "$gpu" "$port" &
     pids+=("$!")
+    label="$(mode_label "$mode")"
+    eval_logs+=("$BASE_RESULT_DIR/${label}_${suite}/eval_driver.log")
 done < <(specs_for_batch)
 
 failed=0
@@ -205,6 +208,14 @@ done
 
 if [[ "$failed" != "0" ]]; then
     echo "One or more evals failed. Check $BASE_RESULT_DIR/*/eval_driver.log" >&2
+    echo
+    echo "Last eval log lines:"
+    for log in "${eval_logs[@]}"; do
+        if [[ -f "$log" ]]; then
+            echo "========== $log =========="
+            tail -n 80 "$log" || true
+        fi
+    done
     exit 1
 fi
 
