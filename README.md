@@ -397,6 +397,68 @@ weight path:
 export QUANTVLA_FAKE_WEIGHT_SOURCE=packed
 ```
 
+### Batched Experiment Runner
+
+Use `run_vlatest_experiment_matrix.sh` to avoid manually opening and closing
+many servers. It starts each server with a unique GPU, port, result tag, report,
+and result directory, then shuts the server down after the matching LIBERO eval
+finishes.
+
+Before running batches, make sure converted checkpoints exist for all suites:
+
+```bash
+bash run_quantvla_convert_all.sh
+```
+
+Run spatial/goal/object for exp1 and exp2 together, then exp3:
+
+```bash
+bash run_vlatest_experiment_matrix.sh short
+```
+
+`short` schedule:
+
+| Wave | Experiment | Suites | GPUs | Ports |
+|---|---|---|---|---|
+| A | exp1 `fake_w4a8` | spatial, goal, object | 0, 1, 2 | 5556, 5557, 5558 |
+| A | exp2 `real` / GPTQ-Marlin | spatial, goal, object | 3, 4, 5 | 5560, 5561, 5562 |
+| B | exp3 `fake_w4a16` | spatial, goal, object | 0, 1, 2 | 5556, 5557, 5558 |
+
+Run long suite for exp1/2/3 together:
+
+```bash
+bash run_vlatest_experiment_matrix.sh long
+```
+
+`long` schedule:
+
+| Experiment | Suite | GPU | Port |
+|---|---|---:|---:|
+| exp1 `fake_w4a8` | libero_10 | 0 | 5556 |
+| exp2 `real` / GPTQ-Marlin | libero_10 | 1 | 5557 |
+| exp3 `fake_w4a16` | libero_10 | 2 | 5558 |
+
+DiT paired probes should be run separately from latency/accuracy runs because
+they compute both Real and Fake outputs on the same DiT MLP input and therefore
+add extra work to the forward pass.
+
+```bash
+bash run_vlatest_experiment_matrix.sh dit_short
+bash run_vlatest_experiment_matrix.sh dit_long
+```
+
+Single-suite DiT probe:
+
+```bash
+bash run_vlatest_experiment_matrix.sh dit_one libero_goal 0 5556
+```
+
+Results are written under:
+
+```bash
+/tmp/logs/vlatest_runs/<timestamp>/
+```
+
 ---
 
 
