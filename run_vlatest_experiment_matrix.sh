@@ -36,6 +36,14 @@ mode_label() {
     esac
 }
 
+default_probe_kind() {
+    if [[ "${ENABLE_DIT_PROBE:-1}" == "0" ]]; then
+        echo "none"
+    else
+        echo "active"
+    fi
+}
+
 checkpoint_for_suite() {
     local suite="$1"
     echo "$SCRIPT_DIR/outputs/${suite}_quantvla_full_gptq_like"
@@ -69,7 +77,7 @@ run_one_job() (
     local suite="$2"
     local gpu="$3"
     local port="$4"
-    local probe="${5:-0}"
+    local probe_kind="${5:-none}"
     local label
     local tag
     local ckpt
@@ -80,7 +88,13 @@ run_one_job() (
     local report
     local server_pid=""
 
-    if [[ "$probe" == "1" ]]; then
+    if [[ "$probe_kind" == "1" ]]; then
+        probe_kind="paired"
+    elif [[ "$probe_kind" == "0" ]]; then
+        probe_kind="none"
+    fi
+
+    if [[ "$probe_kind" == "paired" ]]; then
         label="$(mode_label dit_pair)"
     else
         label="$(mode_label "$mode")"
@@ -116,12 +130,14 @@ run_one_job() (
         export QUANTVLA_FAKE_WEIGHT_SOURCE="${QUANTVLA_FAKE_WEIGHT_SOURCE:-raw_w4}"
         export QUANTVLA_FAKE_ACT_BITS="${QUANTVLA_FAKE_ACT_BITS:-8}"
         export GR00T_TIMING="${GR00T_TIMING:-1}"
-        if [[ "$probe" == "1" ]]; then
+        if [[ "$probe_kind" == "active" || "$probe_kind" == "paired" ]]; then
             export GR00T_DIT_MLP_PROBE=1
-            export GR00T_DIT_MLP_PROBE_PAIR=1
             export GR00T_DIT_MLP_PROBE_DIR="$job_dir/dit_mlp_probe"
             export GR00T_DIT_MLP_PROBE_BINS="${GR00T_DIT_MLP_PROBE_BINS:-128}"
             export GR00T_DIT_MLP_PROBE_ITERS="${GR00T_DIT_MLP_PROBE_ITERS:-first,mid,last}"
+        fi
+        if [[ "$probe_kind" == "paired" ]]; then
+            export GR00T_DIT_MLP_PROBE_PAIR=1
         fi
         bash "$SCRIPT_DIR/run_quantvla_converted_server.sh" "$mode" "$suite" "$ckpt" "$port"
     ) >"$server_log" 2>&1 &
@@ -148,9 +164,10 @@ run_parallel_jobs() {
     local pids=()
     local pid
     for spec in "$@"; do
-        # spec format: mode:suite:gpu:port:probe
-        IFS=: read -r mode suite gpu port probe <<<"$spec"
-        run_one_job "$mode" "$suite" "$gpu" "$port" "$probe" &
+        # spec format: mode:suite:gpu:port:probe_kind
+        # probe_kind: none, active, paired
+        IFS=: read -r mode suite gpu port probe_kind <<<"$spec"
+        run_one_job "$mode" "$suite" "$gpu" "$port" "$probe_kind" &
         pids+=("$!")
     done
 
@@ -164,43 +181,49 @@ run_parallel_jobs() {
 }
 
 run_short() {
+    local probe_kind
+    probe_kind="$(default_probe_kind)"
     echo "[short] results: $BASE_RESULT_DIR"
+    echo "[short] active DiT MLP probe: $probe_kind"
     echo "[short] wave A: exp1 fake_w4a8 on GPUs 0,1,2 and exp2 real on GPUs 3,4,5"
     run_parallel_jobs \
-        "fake_w4a8:libero_spatial:0:5556:0" \
-        "fake_w4a8:libero_goal:1:5557:0" \
-        "fake_w4a8:libero_object:2:5558:0" \
-        "real:libero_spatial:3:5560:0" \
-        "real:libero_goal:4:5561:0" \
-        "real:libero_object:5:5562:0"
+        "fake_w4a8:libero_spatial:0:5556:$probe_kind" \
+        "fake_w4a8:libero_goal:1:5557:$probe_kind" \
+        "fake_w4a8:libero_object:2:5558:$probe_kind" \
+        "real:libero_spatial:3:5560:$probe_kind" \
+        "real:libero_goal:4:5561:$probe_kind" \
+        "real:libero_object:5:5562:$probe_kind"
 
     echo "[short] wave B: exp3 fake_w4a16 on GPUs 0,1,2"
     run_parallel_jobs \
-        "fake:libero_spatial:0:5556:0" \
-        "fake:libero_goal:1:5557:0" \
-        "fake:libero_object:2:5558:0"
+        "fake:libero_spatial:0:5556:$probe_kind" \
+        "fake:libero_goal:1:5557:$probe_kind" \
+        "fake:libero_object:2:5558:$probe_kind"
 }
 
 run_long() {
+    local probe_kind
+    probe_kind="$(default_probe_kind)"
     echo "[long] results: $BASE_RESULT_DIR"
+    echo "[long] active DiT MLP probe: $probe_kind"
     echo "[long] exp1/2/3 all together on GPUs 0,1,2"
     run_parallel_jobs \
-        "fake_w4a8:libero_10:0:5556:0" \
-        "real:libero_10:1:5557:0" \
-        "fake:libero_10:2:5558:0"
+        "fake_w4a8:libero_10:0:5556:$probe_kind" \
+        "real:libero_10:1:5557:$probe_kind" \
+        "fake:libero_10:2:5558:$probe_kind"
 }
 
 run_dit_short() {
     echo "[dit_short] paired DiT probe, separated from latency experiments"
     run_parallel_jobs \
-        "real:libero_spatial:0:5556:1" \
-        "real:libero_goal:1:5557:1" \
-        "real:libero_object:2:5558:1"
+        "real:libero_spatial:0:5556:paired" \
+        "real:libero_goal:1:5557:paired" \
+        "real:libero_object:2:5558:paired"
 }
 
 run_dit_long() {
     echo "[dit_long] paired DiT probe for long suite"
-    run_parallel_jobs "real:libero_10:0:5556:1"
+    run_parallel_jobs "real:libero_10:0:5556:paired"
 }
 
 run_dit_one() {
@@ -208,7 +231,7 @@ run_dit_one() {
     local gpu="${2:-0}"
     local port="${3:-5556}"
     echo "[dit_one] suite=$suite gpu=$gpu port=$port"
-    run_parallel_jobs "real:${suite}:${gpu}:${port}:1"
+    run_parallel_jobs "real:${suite}:${gpu}:${port}:paired"
 }
 
 case "${1:-}" in
@@ -243,6 +266,9 @@ Notes:
     wave B: fake_w4a16 spatial/goal/object on GPU 0/1/2
   long:
     fake_w4a8, real, fake_w4a16 for libero_10 on GPU 0/1/2 together
+  DiT active probe:
+    enabled by default for short/long and saved under each job's dit_mlp_probe.
+    disable for pure latency with ENABLE_DIT_PROBE=0.
   dit_*:
     separate paired DiT probe runs; do not mix these with latency runs.
 

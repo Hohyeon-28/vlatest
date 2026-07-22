@@ -404,6 +404,12 @@ many servers. It starts each server with a unique GPU, port, result tag, report,
 and result directory, then shuts the server down after the matching LIBERO eval
 finishes.
 
+By default, the matrix also records the active DiT MLP distribution for the
+policy that is actually running in that job. This is different from the paired
+Real/Fake diagnostic below: no extra reference policy is evaluated inside the
+forward pass. Disable this extra probe overhead for pure latency runs with
+`ENABLE_DIT_PROBE=0`.
+
 Before running batches, make sure converted checkpoints exist for all suites:
 
 ```bash
@@ -424,6 +430,12 @@ bash run_vlatest_experiment_matrix.sh short
 | A | exp2 `real` / GPTQ-Marlin | spatial, goal, object | 3, 4, 5 | 5560, 5561, 5562 |
 | B | exp3 `fake_w4a16` | spatial, goal, object | 0, 1, 2 | 5556, 5557, 5558 |
 
+Each job writes its own active DiT MLP probe under:
+
+```bash
+/tmp/logs/vlatest_runs/<RUN_ID>/<experiment>_<suite>/dit_mlp_probe/
+```
+
 Run long suite for exp1/2/3 together:
 
 ```bash
@@ -438,9 +450,28 @@ bash run_vlatest_experiment_matrix.sh long
 | exp2 `real` / GPTQ-Marlin | libero_10 | 1 | 5557 |
 | exp3 `fake_w4a16` | libero_10 | 2 | 5558 |
 
-DiT paired probes should be run separately from latency/accuracy runs because
-they compute both Real and Fake outputs on the same DiT MLP input and therefore
-add extra work to the forward pass.
+If you want to keep server terminals open and launch evals from a separate
+terminal, use the split scripts. The server script prints the `RUN_ID`; pass the
+same value to the eval script:
+
+```bash
+RUN_ID=short_fake_w4a8_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_fake_w4a8
+bash run_vlatest_evals_only.sh short_fake_w4a8 short_fake_w4a8_YYYYMMDD_HHMMSS
+
+RUN_ID=short_real_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_real
+bash run_vlatest_evals_only.sh short_real short_real_YYYYMMDD_HHMMSS
+
+RUN_ID=short_fake_w4a16_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh short_fake_w4a16
+bash run_vlatest_evals_only.sh short_fake_w4a16 short_fake_w4a16_YYYYMMDD_HHMMSS
+
+RUN_ID=long_$(date +%Y%m%d_%H%M%S) bash run_vlatest_servers_only.sh long
+bash run_vlatest_evals_only.sh long long_YYYYMMDD_HHMMSS
+```
+
+DiT paired probes remain available as a separate diagnostic. Use them only when
+you specifically need Real and Fake outputs computed from the exact same DiT
+MLP input tensor. They add extra work to the forward pass, so they are not the
+default accuracy/latency experiment.
 
 ```bash
 bash run_vlatest_experiment_matrix.sh dit_short
