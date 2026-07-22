@@ -15,7 +15,52 @@ def _read_rows(paths: list[Path]) -> list[dict]:
     for path in paths:
         with path.open("r", encoding="utf-8", newline="") as f:
             for row in csv.DictReader(f):
+                if "fake_abs_mean" in row and "real_abs_mean" in row:
+                    common = {
+                        "_source": str(path),
+                        "_paired": True,
+                        "task": row["task"],
+                        "layer": row["layer"],
+                        "layer_index": int(row["layer_index"]),
+                        "denoise_iter": int(row["denoise_iter"]),
+                        "iter_label": row["iter_label"],
+                        "channel_bin": int(row["channel_bin"]),
+                        "calls": int(row["calls"]),
+                    }
+                    fake = {
+                        **common,
+                        "mode": "fake",
+                        "mean": float(row["fake_mean"]),
+                        "abs_mean": float(row["fake_abs_mean"]),
+                        "std": float("nan"),
+                        "rms": float(row["fake_rms"]),
+                        "min": float("nan"),
+                        "max": float("nan"),
+                    }
+                    real = {
+                        **common,
+                        "mode": "real",
+                        "mean": float(row["real_mean"]),
+                        "abs_mean": float(row["real_abs_mean"]),
+                        "std": float("nan"),
+                        "rms": float(row["real_rms"]),
+                        "min": float("nan"),
+                        "max": float("nan"),
+                    }
+                    diff = {
+                        **common,
+                        "mode": "paired_abs_diff",
+                        "mean": float(row["diff_mean"]),
+                        "abs_mean": float(row["diff_abs_mean"]),
+                        "std": float("nan"),
+                        "rms": float(row["diff_rms"]),
+                        "min": 0.0,
+                        "max": float(row["max_abs_diff"]),
+                    }
+                    rows.extend([fake, real, diff])
+                    continue
                 row["_source"] = str(path)
+                row["_paired"] = False
                 for key in ["layer_index", "denoise_iter", "channel_bin", "calls"]:
                     row[key] = int(row[key])
                 for key in ["mean", "abs_mean", "std", "rms", "min", "max"]:
@@ -85,6 +130,8 @@ def _compare_rows(rows: list[dict], metric: str) -> list[dict]:
     out: list[dict] = []
     for key, modes in by_key.items():
         if "fake" not in modes or "real" not in modes:
+            continue
+        if not (modes["fake"].get("_paired") and modes["real"].get("_paired")):
             continue
         fake_value = modes["fake"][metric]
         real_value = modes["real"][metric]

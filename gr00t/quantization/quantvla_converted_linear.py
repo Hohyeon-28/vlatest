@@ -37,6 +37,10 @@ GPTQ_QUANT_MODE_FAKE = "fake"
 GPTQ_QUANT_MODE_REAL = "real"
 
 
+def _env_enabled(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default) not in ("0", "false", "False", "")
+
+
 def _load_vllm_gptq_marlin_symbols() -> tuple[type, type, str]:
     """Load vLLM's GPTQ-Marlin Linear symbols with actionable diagnostics.
 
@@ -322,6 +326,45 @@ class QuantVLARealQuantMarlinLinear(nn.Module):
         return out
 
 
+class QuantVLAPairedRealFakeLinear(nn.Module):
+    """Run RealQuant for policy output and record FakeQuant on the same input.
+
+    This is a diagnostic wrapper for paired DiT activation probes. The returned
+    tensor is always the RealQuant result, so LIBERO behavior stays RealQuant.
+    FakeQuant is computed only when the active probe asks for a sampled call.
+    """
+
+    def __init__(self, pack: ConvertedLayerPack, dtype: torch.dtype = torch.bfloat16) -> None:
+        super().__init__()
+        self.name = pack.prefix
+        self.in_features = pack.in_features
+        self.out_features = pack.out_features
+        self.real = QuantVLARealQuantMarlinLinear(pack, dtype=dtype)
+        self.fake = QuantVLAFakeQuantLinear(pack, dtype=dtype)
+
+    @torch.inference_mode()
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        real_out = self.real(x)
+        if not _env_enabled("GR00T_DIT_MLP_PROBE_PAIR"):
+            return real_out
+        try:
+            from .dit_mlp_probe import get_active_dit_mlp_probe
+
+            probe = get_active_dit_mlp_probe()
+            if probe is None:
+                return real_out
+            iter_idx, should_record = probe.reserve_pair_call(self.name)
+            if not should_record:
+                return real_out
+            fake_out = self.fake(x)
+            probe.record_pair(self.name, iter_idx, fake_out, real_out)
+        except Exception as exc:
+            if _env_enabled("GR00T_DIT_MLP_PROBE_STRICT"):
+                raise
+            print(f"[DiT-MLP-PROBE] paired real/fake record skipped for {self.name}: {type(exc).__name__}: {exc}")
+        return real_out
+
+
 def mode_definitions() -> dict[str, str]:
     return {
         GPTQ_QUANT_MODE_FAKE: "QuantVLA-converted GPTQ-like qweight/scales -> dense dequant -> torch F.linear",
@@ -485,7 +528,10 @@ def replace_quantvla_converted_linears(
         try:
             _validate_shape(name, module, pack)
             if mode == GPTQ_QUANT_MODE_REAL:
-                wrapper = QuantVLARealQuantMarlinLinear(pack, dtype=dtype)
+                if _env_enabled("GR00T_DIT_MLP_PROBE_PAIR"):
+                    wrapper = QuantVLAPairedRealFakeLinear(pack, dtype=dtype)
+                else:
+                    wrapper = QuantVLARealQuantMarlinLinear(pack, dtype=dtype)
             else:
                 wrapper = QuantVLAFakeQuantLinear(pack, dtype=dtype)
         except Exception as exc:

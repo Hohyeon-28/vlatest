@@ -304,6 +304,50 @@ This script:
 
 ---
 
+## Paired DiT MLP Real/Fake Heatmaps
+
+Use this when you need RealQuant and FakeQuant DiT MLP output distributions
+from the same input activations. Do not start a separate Fake server for this
+comparison. Start a Real server with paired probing enabled; the policy still
+uses RealQuant output, while FakeQuant is computed only as a reference sample.
+
+```bash
+export GR00T_DIT_MLP_PROBE=1
+export GR00T_DIT_MLP_PROBE_PAIR=1
+export GR00T_DIT_MLP_PROBE_DIR=/tmp/logs/dit_mlp_probe_pair_goal
+export GR00T_DIT_MLP_PROBE_BINS=128
+export GR00T_DIT_MLP_PROBE_ITERS=first,mid,last
+
+CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh real libero_goal 5556
+```
+
+Then run LIBERO evaluation against that server:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash run_libero_eval.sh libero_goal --headless --port 5556 --result-tag real_pair_probe
+```
+
+The paired CSV is written as:
+
+```bash
+/tmp/logs/dit_mlp_probe_pair_goal/dit_mlp_up_probe_pair_real_libero_goal.csv
+```
+
+Render separate Fake, Real, and difference heatmaps:
+
+```bash
+python vlaconvert_tools/plot_dit_mlp_probe.py \
+  /tmp/logs/dit_mlp_probe_pair_goal/dit_mlp_up_probe_pair_real_libero_goal.csv \
+  --metric abs_mean \
+  --output /tmp/logs/dit_mlp_probe_pair_goal/dit_mlp_up_pair_abs_mean.html
+```
+
+The generated HTML keeps Fake, Real, and paired absolute-difference heatmaps
+as separate sections. The Real-Fake percent section is computed from the same
+paired CSV rows, not from two independent server runs.
+
+---
+
 
 ## Acknowledgements
 
