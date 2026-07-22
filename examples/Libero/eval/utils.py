@@ -46,14 +46,33 @@ def get_libero_image(obs):
     return img, wrist_img
 
 
-def save_rollout_video(top_view, wrist_view, idx, success, task_description, log_file=None):
+def _safe_path_token(value):
+    return "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in value)
+
+
+def save_rollout_video(
+    top_view,
+    wrist_view,
+    idx,
+    success,
+    task_description,
+    log_file=None,
+    result_tag="",
+    rollout_root=None,
+):
     """Saves an MP4 replay of an episode."""
-    rollout_dir = f"./rollouts/{DATE}"
+    safe_tag = _safe_path_token(result_tag.strip()) if result_tag else ""
+    rollout_base = rollout_root or "./rollouts"
+    rollout_dir = f"{rollout_base}/{DATE}"
     os.makedirs(rollout_dir, exist_ok=True)
     processed_task_description = (
         task_description.lower().replace(" ", "_").replace("\n", "_").replace(".", "_")[:50]
     )
-    mp4_path = f"{rollout_dir}/{DATE_TIME}--episode={idx}--success={success}--task={processed_task_description}.mp4"
+    tag_part = f"--tag={safe_tag}" if safe_tag else ""
+    mp4_path = (
+        f"{rollout_dir}/{DATE_TIME}{tag_part}--episode={idx}--success={success}"
+        f"--task={processed_task_description}.mp4"
+    )
     video_writer = imageio.get_writer(mp4_path, fps=30)
     for img1, img2 in zip(top_view, wrist_view):
         combined = np.hstack((img1, img2))

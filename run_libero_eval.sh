@@ -68,7 +68,7 @@ echo "  - Log: /tmp/logs/libero_eval_${TASK}${RESULT_SUFFIX}.log"
 echo "  - Latency JSONL: /tmp/logs/libero_eval_${TASK}${RESULT_SUFFIX}_latency_steps.jsonl"
 echo "  - Latency CSV: /tmp/logs/libero_eval_${TASK}${RESULT_SUFFIX}_latency_steps.csv"
 echo "  - Latency summary: /tmp/logs/libero_eval_${TASK}${RESULT_SUFFIX}_latency_summary.json"
-echo "  - Videos: /tmp/logs/rollout_*.mp4"
+echo "  - Videos: /tmp/logs/rollouts/libero_eval_${TASK}${RESULT_SUFFIX}/<date>/*.mp4"
 echo "=========================================="
 echo ""
 

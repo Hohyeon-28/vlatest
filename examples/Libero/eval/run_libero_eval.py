@@ -255,6 +255,7 @@ def eval_libero(cfg: GenerateConfig) -> None:
     result_tag = cfg.result_tag.strip()
     result_suffix = f"_{result_tag}" if result_tag else ""
     result_prefix = f"libero_eval_{cfg.task_suite_name}{result_suffix}"
+    rollout_root = f"{result_dir}/rollouts/{result_prefix}"
 
     # Initialize LIBERO task suite
     benchmark_dict = benchmark.get_benchmark_dict()
@@ -422,6 +423,8 @@ def eval_libero(cfg: GenerateConfig) -> None:
                 success=done,
                 task_description=task_description,
                 log_file=log_file,
+                result_tag=result_tag,
+                rollout_root=rollout_root,
             )
 
             # Log current results
@@ -471,6 +474,7 @@ def eval_libero(cfg: GenerateConfig) -> None:
                 "jsonl": latency_jsonl_path,
                 "csv": latency_csv_path,
                 "summary": latency_summary_path,
+                "rollouts": rollout_root,
             },
         }
         with open(latency_summary_path, "w") as f:
