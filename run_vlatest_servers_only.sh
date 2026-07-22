@@ -78,15 +78,15 @@ specs_for_batch() {
             ;;
         short_real)
             printf '%s\n' \
-                "real:libero_spatial:3:5560" \
-                "real:libero_goal:4:5561" \
-                "real:libero_object:5:5562"
+                "real:libero_spatial:0:5544" \
+                "real:libero_goal:1:5545" \
+                "real:libero_object:2:5546"
             ;;
         short_fake_w4a16)
             printf '%s\n' \
-                "fake:libero_spatial:0:5556" \
-                "fake:libero_goal:1:5557" \
-                "fake:libero_object:2:5558"
+                "fake:libero_spatial:3:5560" \
+                "fake:libero_goal:4:5561" \
+                "fake:libero_object:5:5562"
             ;;
         long)
             printf '%s\n' \

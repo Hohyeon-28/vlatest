@@ -171,6 +171,8 @@ class GenerateConfig:
     result_tag: str = ""
     """Directory for eval logs and latency files."""
     result_dir: str = log_dir
+    """Save rollout MP4 files. Disabled by default for batch accuracy/latency runs."""
+    save_videos: bool = False
 
 
 class GR00TPolicy:
@@ -367,12 +369,10 @@ def eval_libero(cfg: GenerateConfig) -> None:
                         t += 1
                         continue
 
-                    # # Get preprocessed image
-                    img, wrist_img = get_libero_image(obs)
-
-                    # # Save preprocessed image for replay video
-                    top_view.append(img)
-                    wrist_view.append(wrist_img)
+                    if cfg.save_videos:
+                        img, wrist_img = get_libero_image(obs)
+                        top_view.append(img)
+                        wrist_view.append(wrist_img)
 
                     action_step_index = t - cfg.num_steps_wait
                     step_start = time.perf_counter()
@@ -435,17 +435,17 @@ def eval_libero(cfg: GenerateConfig) -> None:
             task_episodes += 1
             total_episodes += 1
 
-            # Save a replay video of the episode
-            save_rollout_video(
-                top_view,
-                wrist_view,
-                total_episodes,
-                success=done,
-                task_description=task_description,
-                log_file=log_file,
-                result_tag=result_tag,
-                rollout_root=rollout_root,
-            )
+            if cfg.save_videos:
+                save_rollout_video(
+                    top_view,
+                    wrist_view,
+                    total_episodes,
+                    success=done,
+                    task_description=task_description,
+                    log_file=log_file,
+                    result_tag=result_tag,
+                    rollout_root=rollout_root,
+                )
 
             # Log current results
             print(f"Success: {done}")
