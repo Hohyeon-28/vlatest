@@ -8,6 +8,8 @@ It reads:
 
 and writes:
   - accuracy_latency_summary.csv
+  - episode_steps_summary.csv
+  - task_steps_summary.csv
   - mlp_probe_summary.csv
   - vlatest_experiment_report.html
 """
@@ -72,6 +74,15 @@ def parse_eval_log(path: Path) -> dict:
     return {}
 
 
+def parse_episode_successes(path: Path) -> list[dict]:
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    successes = re.findall(r"Success:\s*(True|False)", text)
+    out: list[dict] = []
+    for idx, value in enumerate(successes, start=1):
+        out.append({"global_episode": idx, "success": value == "True"})
+    return out
+
+
 def load_replacement(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -125,6 +136,115 @@ def read_accuracy_latency(exp_dir: Path) -> dict:
     row.update(parse_eval_log(exp_dir / "eval_driver.log"))
     row.update(load_replacement(exp_dir / "replacement_report.json"))
     return row
+
+
+def read_episode_steps(exp_dir: Path, method: str, suite: str) -> list[dict]:
+    csv_paths = list((exp_dir / "results").glob("*_latency_steps.csv"))
+    if not csv_paths:
+        return []
+    success_by_episode = {
+        row["global_episode"]: row["success"] for row in parse_episode_successes(exp_dir / "eval_driver.log")
+    }
+    grouped: dict[int, dict] = {}
+    with csv_paths[0].open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                global_episode = int(row["global_episode"])
+                task_id = int(row["task_id"])
+            except Exception:
+                continue
+            item = grouped.setdefault(
+                global_episode,
+                {
+                    "method": method,
+                    "suite": suite,
+                    "suite_label": suite_label(suite),
+                    "global_episode": global_episode,
+                    "task_id": task_id,
+                    "task_description": row.get("task_description", ""),
+                    "steps": 0,
+                    "step_total_ms_values": [],
+                    "policy_model_get_action_ms_values": [],
+                },
+            )
+            item["steps"] += 1
+            for key in ["step_total_ms", "policy_model_get_action_ms"]:
+                try:
+                    item[f"{key}_values"].append(float(row[key]))
+                except Exception:
+                    pass
+    out: list[dict] = []
+    for global_episode, item in sorted(grouped.items()):
+        step_values = item.pop("step_total_ms_values")
+        model_values = item.pop("policy_model_get_action_ms_values")
+        success = success_by_episode.get(global_episode)
+        item.update(
+            {
+                "success": success,
+                "step_total_ms_mean": mean(step_values),
+                "policy_model_get_action_ms_mean": mean(model_values),
+            }
+        )
+        out.append(item)
+    return out
+
+
+def summarize_episode_steps(rows: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["method"], row["suite"])].append(row)
+
+    out: list[dict] = []
+    for (method, suite), group in grouped.items():
+        success_rows = [r for r in group if r.get("success") is True]
+        fail_rows = [r for r in group if r.get("success") is False]
+        out.append(
+            {
+                "method": method,
+                "suite": suite,
+                "suite_label": suite_label(suite),
+                "episodes": len(group),
+                "success_episodes": len(success_rows),
+                "failed_episodes": len(fail_rows),
+                "steps_mean_all": mean([float(r["steps"]) for r in group]),
+                "steps_mean_success": mean([float(r["steps"]) for r in success_rows]),
+                "steps_mean_fail": mean([float(r["steps"]) for r in fail_rows]),
+                "step_total_ms_mean_success": mean([float(r["step_total_ms_mean"]) for r in success_rows]),
+                "policy_model_get_action_ms_mean_success": mean(
+                    [float(r["policy_model_get_action_ms_mean"]) for r in success_rows]
+                ),
+            }
+        )
+    return sorted(out, key=lambda r: (METHOD_ORDER.get(r["method"], 99), SUITE_ORDER.get(r["suite"], 99)))
+
+
+def summarize_task_steps(rows: list[dict]) -> list[dict]:
+    grouped: dict[tuple[str, str, int, str], list[dict]] = defaultdict(list)
+    for row in rows:
+        grouped[(row["method"], row["suite"], row["task_id"], row["task_description"])].append(row)
+
+    out: list[dict] = []
+    for (method, suite, task_id, task_description), group in grouped.items():
+        success_rows = [r for r in group if r.get("success") is True]
+        out.append(
+            {
+                "method": method,
+                "suite": suite,
+                "suite_label": suite_label(suite),
+                "task_id": task_id,
+                "task_description": task_description,
+                "episodes": len(group),
+                "successes": len(success_rows),
+                "success_rate": len(success_rows) / len(group) if group else float("nan"),
+                "steps_mean_all": mean([float(r["steps"]) for r in group]),
+                "steps_mean_success": mean([float(r["steps"]) for r in success_rows]),
+            }
+        )
+    return sorted(
+        out,
+        key=lambda r: (METHOD_ORDER.get(r["method"], 99), SUITE_ORDER.get(r["suite"], 99), int(r["task_id"])),
+    )
 
 
 def read_mlp_probe(exp_dir: Path) -> list[dict]:
@@ -320,7 +440,14 @@ def table(rows: list[dict], columns: list[tuple[str, str, str]]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
 
 
-def write_html_report(path: Path, acc_rows: list[dict], mlp_summary: list[dict], mlp_rows: list[dict]) -> None:
+def write_html_report(
+    path: Path,
+    acc_rows: list[dict],
+    episode_step_summary: list[dict],
+    task_step_summary: list[dict],
+    mlp_summary: list[dict],
+    mlp_rows: list[dict],
+) -> None:
     acc_rows = sorted(acc_rows, key=lambda r: (METHOD_ORDER.get(r["method"], 99), SUITE_ORDER.get(r["suite"], 99)))
     mlp_summary = sorted(mlp_summary, key=lambda r: (METHOD_ORDER.get(r["method"], 99), SUITE_ORDER.get(r["suite"], 99)))
     acc_table = table(
@@ -352,6 +479,35 @@ def write_html_report(path: Path, acc_rows: list[dict], mlp_summary: list[dict],
             ("std_avg", "STD avg", "float"),
             ("min_seen", "Min seen", "float"),
             ("max_seen", "Max seen", "float"),
+        ],
+    )
+    episode_step_table = table(
+        episode_step_summary,
+        [
+            ("method", "Method", "text"),
+            ("suite_label", "Suite", "text"),
+            ("episodes", "Episodes", "text"),
+            ("success_episodes", "Success episodes", "text"),
+            ("failed_episodes", "Failed episodes", "text"),
+            ("steps_mean_success", "Mean steps on success", "float"),
+            ("steps_mean_fail", "Mean steps on failure", "float"),
+            ("steps_mean_all", "Mean steps all", "float"),
+            ("step_total_ms_mean_success", "Success step total ms", "ms"),
+            ("policy_model_get_action_ms_mean_success", "Success model ms", "ms"),
+        ],
+    )
+    task_step_table = table(
+        task_step_summary,
+        [
+            ("method", "Method", "text"),
+            ("suite_label", "Suite", "text"),
+            ("task_id", "Task id", "text"),
+            ("successes", "Successes", "text"),
+            ("episodes", "Episodes", "text"),
+            ("success_rate", "Accuracy", "pct"),
+            ("steps_mean_success", "Mean success steps", "float"),
+            ("steps_mean_all", "Mean all steps", "float"),
+            ("task_description", "Task", "text"),
         ],
     )
     doc = f"""<!doctype html>
@@ -401,13 +557,31 @@ def write_html_report(path: Path, acc_rows: list[dict], mlp_summary: list[dict],
 
   {chart_latency(acc_rows, "step_total_ms_mean", "Step Total Latency")}
 
+  <h2>Episode Step Summary</h2>
+  <p>
+    Step counts are grouped from <code>latency_steps.csv</code> by
+    <code>global_episode</code>. Success/failure is joined from the matching
+    <code>eval_driver.log</code> sequence.
+  </p>
+  {episode_step_table}
+
+  <h2>Task-level Step Summary</h2>
+  <p>
+    Each LIBERO short suite has 10 tasks and 5 episodes per task. This table
+    shows per-task success count and the average number of action steps.
+  </p>
+  {task_step_table}
+
   <h2>DiT MLP Probe Summary</h2>
   {mlp_table}
 
   <h2>DiT MLP Channel-bin Profiles</h2>
   <p>
     Lines show the average <code>abs_mean</code> across DiT MLP layers for each channel bin.
-    This is a channel profile, not a raw activation-value histogram.
+    This is a channel profile, not a raw activation-value histogram. If a red
+    RealQuant line hides the blue/green FakeQuant lines, the profiles are almost
+    numerically overlapping on this shared y-axis; missing legends indicate
+    missing or empty probe CSVs for that suite.
   </p>
   {chart_mlp_profiles(mlp_rows, "abs_mean")}
 </body>
@@ -445,15 +619,33 @@ def main() -> int:
     acc_rows = sorted(best.values(), key=lambda r: (METHOD_ORDER.get(r["method"], 99), SUITE_ORDER.get(r["suite"], 99)))
 
     mlp_rows: list[dict] = []
+    episode_rows: list[dict] = []
     for row in acc_rows:
-        mlp_rows.extend(read_mlp_probe(Path(row["exp_dir"])))
+        exp_dir = Path(row["exp_dir"])
+        mlp_rows.extend(read_mlp_probe(exp_dir))
+        episode_rows.extend(read_episode_steps(exp_dir, row["method"], row["suite"]))
     mlp_summary = summarize_mlp(mlp_rows)
+    episode_step_summary = summarize_episode_steps(episode_rows)
+    task_step_summary = summarize_task_steps(episode_rows)
 
     write_csv(out_dir / "accuracy_latency_summary.csv", acc_rows)
+    write_csv(out_dir / "episode_steps.csv", episode_rows)
+    write_csv(out_dir / "episode_steps_summary.csv", episode_step_summary)
+    write_csv(out_dir / "task_steps_summary.csv", task_step_summary)
     write_csv(out_dir / "mlp_probe_summary.csv", mlp_summary)
-    write_html_report(out_dir / "vlatest_experiment_report.html", acc_rows, mlp_summary, mlp_rows)
+    write_html_report(
+        out_dir / "vlatest_experiment_report.html",
+        acc_rows,
+        episode_step_summary,
+        task_step_summary,
+        mlp_summary,
+        mlp_rows,
+    )
 
     print(f"Wrote {out_dir / 'accuracy_latency_summary.csv'}")
+    print(f"Wrote {out_dir / 'episode_steps.csv'}")
+    print(f"Wrote {out_dir / 'episode_steps_summary.csv'}")
+    print(f"Wrote {out_dir / 'task_steps_summary.csv'}")
     print(f"Wrote {out_dir / 'mlp_probe_summary.csv'}")
     print(f"Wrote {out_dir / 'vlatest_experiment_report.html'}")
     return 0
