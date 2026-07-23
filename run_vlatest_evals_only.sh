@@ -6,6 +6,7 @@
 #   bash run_vlatest_evals_only.sh short_real <RUN_ID>
 #   bash run_vlatest_evals_only.sh short_fake_w4a16 <RUN_ID>
 #   bash run_vlatest_evals_only.sh long <RUN_ID>
+#   bash run_vlatest_evals_only.sh diag_spatial <RUN_ID>
 #
 # RUN_ID can be omitted. In that case this script uses the newest matching
 # vlatest_results/<batch>_* directory created by run_vlatest_servers_only.sh.
@@ -30,7 +31,7 @@ mode_label() {
 
 default_run_prefix() {
     case "$BATCH" in
-        short_fake_w4a8|short_real|short_fake_w4a16|long)
+        short_fake_w4a8|short_real|short_fake_w4a16|long|diag_spatial)
             echo "$BATCH"
             ;;
         *)
@@ -78,6 +79,12 @@ specs_for_batch() {
                 "real:libero_10:1:5557" \
                 "fake:libero_10:2:5558"
             ;;
+        diag_spatial)
+            printf '%s\n' \
+                "fake_w4a8:libero_spatial:0:5570" \
+                "real:libero_spatial:1:5571" \
+                "fake:libero_spatial:2:5572"
+            ;;
         *)
             cat >&2 <<EOF
 Usage:
@@ -85,6 +92,7 @@ Usage:
   bash run_vlatest_evals_only.sh short_real <RUN_ID>
   bash run_vlatest_evals_only.sh short_fake_w4a16 <RUN_ID>
   bash run_vlatest_evals_only.sh long <RUN_ID>
+  bash run_vlatest_evals_only.sh diag_spatial <RUN_ID>
 EOF
             return 2
             ;;
@@ -93,7 +101,7 @@ EOF
 
 validate_batch() {
     case "$BATCH" in
-        short_fake_w4a8|short_real|short_fake_w4a16|long)
+        short_fake_w4a8|short_real|short_fake_w4a16|long|diag_spatial)
             ;;
         *)
             specs_for_batch >/dev/null
@@ -170,12 +178,17 @@ run_eval_job() (
     echo "[$tag] eval gpu=$gpu port=$port"
     (
         export CUDA_VISIBLE_DEVICES="$gpu"
+        extra_args=()
+        if [[ "${RECORD_ACTION_TRACE:-0}" != "0" || "$BATCH" == "diag_spatial" ]]; then
+            extra_args+=(--record-actions)
+        fi
         bash "$SCRIPT_DIR/run_libero_eval.sh" \
             "$suite" \
             --headless \
             --port "$port" \
             --result-tag "$tag" \
-            --result-dir "$result_dir"
+            --result-dir "$result_dir" \
+            "${extra_args[@]}"
     ) >"$eval_log" 2>&1
     echo "[$tag] eval done"
 )

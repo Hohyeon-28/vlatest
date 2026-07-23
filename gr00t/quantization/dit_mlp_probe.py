@@ -15,7 +15,13 @@ import torch
 from torch import nn
 
 
-DEFAULT_LAYER_REGEX = r"action_head\.model\.transformer_blocks\.(\d+)\.ff\.net\.0\.proj$"
+DEFAULT_LAYER_REGEX = r"action_head\.model\.transformer_blocks\.(\d+)\.ff\.net\.(0\.proj|2)$"
+
+
+def _target_from_match(match: re.Match[str]) -> str:
+    if match.lastindex and match.lastindex >= 2 and match.group(2) == "2":
+        return "down_proj"
+    return "up_proj"
 
 
 def _env_enabled(name: str, default: str = "0") -> bool:
@@ -146,14 +152,15 @@ class DiTMLPProbe:
         self.call_counts: dict[str, int] = {}
         self.pair_call_counts: dict[str, int] = {}
         self.layer_indices: dict[str, int] = {}
+        self.layer_targets: dict[str, str] = {}
         self.accum: dict[tuple[str, int, int], _BinAccum] = {}
         self.pair_accum: dict[tuple[str, int, int], _PairBinAccum] = {}
         self.hooks: list[Any] = []
         self.lock = threading.RLock()
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.csv_path = self.output_dir / f"dit_mlp_up_probe_{self.mode}_{self.task}.csv"
-        self.pair_csv_path = self.output_dir / f"dit_mlp_up_probe_pair_{self.mode}_{self.task}.csv"
-        self.meta_path = self.output_dir / f"dit_mlp_up_probe_{self.mode}_{self.task}_meta.txt"
+        self.csv_path = self.output_dir / f"dit_mlp_probe_{self.mode}_{self.task}.csv"
+        self.pair_csv_path = self.output_dir / f"dit_mlp_probe_pair_{self.mode}_{self.task}.csv"
+        self.meta_path = self.output_dir / f"dit_mlp_probe_{self.mode}_{self.task}_meta.txt"
         self.flush_every = int(os.environ.get("GR00T_DIT_MLP_PROBE_FLUSH_EVERY", "2000"))
         self.total_observed_calls = 0
         self.total_pair_calls = 0
@@ -167,6 +174,7 @@ class DiTMLPProbe:
             if self.selected_layers is not None and layer_idx not in self.selected_layers:
                 continue
             self.layer_indices[name] = layer_idx
+            self.layer_targets[name] = _target_from_match(match)
             self.call_counts[name] = 0
             self.hooks.append(module.register_forward_hook(self._make_hook(name)))
         self._write_meta()
@@ -251,6 +259,7 @@ class DiTMLPProbe:
             return 0, False
         with self.lock:
             self.layer_indices.setdefault(name, layer_idx)
+            self.layer_targets.setdefault(name, _target_from_match(match))
             call_idx = self.pair_call_counts.get(name, 0)
             self.pair_call_counts[name] = call_idx + 1
             iter_idx = call_idx % self.num_steps
@@ -321,6 +330,7 @@ class DiTMLPProbe:
                 "mode",
                 "task",
                 "layer",
+                "target",
                 "layer_index",
                 "denoise_iter",
                 "iter_label",
@@ -345,6 +355,7 @@ class DiTMLPProbe:
                             "mode": self.mode,
                             "task": self.task,
                             "layer": layer,
+                            "target": self.layer_targets.get(layer, "unknown"),
                             "layer_index": self.layer_indices[layer],
                             "denoise_iter": iter_idx,
                             "iter_label": _iter_label(iter_idx, self.num_steps),
@@ -364,6 +375,7 @@ class DiTMLPProbe:
                     "active_mode",
                     "reference_mode",
                     "layer",
+                    "target",
                     "layer_index",
                     "denoise_iter",
                     "iter_label",
@@ -399,6 +411,7 @@ class DiTMLPProbe:
                                 "active_mode": "real",
                                 "reference_mode": "fake",
                                 "layer": layer,
+                                "target": self.layer_targets.get(layer, "unknown"),
                                 "layer_index": self.layer_indices[layer],
                                 "denoise_iter": iter_idx,
                                 "iter_label": _iter_label(iter_idx, self.num_steps),

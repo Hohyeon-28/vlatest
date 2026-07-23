@@ -173,6 +173,8 @@ class GenerateConfig:
     result_dir: str = log_dir
     """Save rollout MP4 files. Disabled by default for batch accuracy/latency runs."""
     save_videos: bool = False
+    """Record executed actions and full policy action chunks for trajectory comparison."""
+    record_actions: bool = False
 
 
 class GR00TPolicy:
@@ -199,6 +201,7 @@ class GR00TPolicy:
         self.action_keys = ["x", "y", "z", "roll", "pitch", "yaw", "gripper"]
         self.headless = headless
         self.last_timing = {}
+        self.last_action_chunk = {}
 
     def get_action(self, observation_dict, lang: str):
         """Get action from GR00T policy given observation and language instruction."""
@@ -210,6 +213,11 @@ class GR00TPolicy:
         client_start = time.perf_counter()
         action_chunk = self.policy.get_action(obs_dict)
         client_get_action_ms = (time.perf_counter() - client_start) * 1000.0
+        self.last_action_chunk = {
+            key: np.asarray(value).tolist()
+            for key, value in action_chunk.items()
+            if key.startswith("action.")
+        }
         convert_start = time.perf_counter()
         action = self._convert_to_libero_action(action_chunk, 0)
         action_convert_ms = (time.perf_counter() - convert_start) * 1000.0
@@ -296,11 +304,43 @@ def eval_libero(cfg: GenerateConfig) -> None:
     latency_jsonl_path = f"{result_dir}/{result_prefix}_latency_steps.jsonl"
     latency_csv_path = f"{result_dir}/{result_prefix}_latency_steps.csv"
     latency_summary_path = f"{result_dir}/{result_prefix}_latency_summary.json"
+    action_trace_jsonl_file = None
+    action_trace_csv_file = None
+    action_trace_csv_writer = None
+    action_trace_jsonl_path = f"{result_dir}/{result_prefix}_action_trace.jsonl"
+    action_trace_csv_path = f"{result_dir}/{result_prefix}_action_trace.csv"
     if cfg.record_timing:
         latency_jsonl_file = open(latency_jsonl_path, "w")
         log_file.write(f"Latency JSONL: {latency_jsonl_path}\n")
         log_file.write(f"Latency CSV: {latency_csv_path}\n")
         log_file.write(f"Latency summary: {latency_summary_path}\n")
+    if cfg.record_actions:
+        action_trace_jsonl_file = open(action_trace_jsonl_path, "w", encoding="utf-8")
+        action_trace_csv_file = open(action_trace_csv_path, "w", newline="", encoding="utf-8")
+        action_trace_csv_writer = csv.DictWriter(
+            action_trace_csv_file,
+            fieldnames=[
+                "task_suite",
+                "task_id",
+                "task_description",
+                "episode_idx",
+                "global_episode",
+                "sim_t",
+                "action_step_index",
+                "done",
+                "reward",
+                "action_x",
+                "action_y",
+                "action_z",
+                "action_roll",
+                "action_pitch",
+                "action_yaw",
+                "action_gripper",
+            ],
+        )
+        action_trace_csv_writer.writeheader()
+        log_file.write(f"Action trace JSONL: {action_trace_jsonl_path}\n")
+        log_file.write(f"Action trace CSV: {action_trace_csv_path}\n")
 
     # Decide which task indices to run
     if cfg.task_ids:
@@ -388,6 +428,46 @@ def eval_libero(cfg: GenerateConfig) -> None:
                     obs, reward, done, info = env.step(action.tolist())
                     env_step_ms = (time.perf_counter() - env_step_start) * 1000.0
                     step_total_ms = (time.perf_counter() - step_start) * 1000.0
+
+                    if cfg.record_actions:
+                        action_values = [float(value) for value in action.tolist()]
+                        action_base_record = {
+                            "task_suite": cfg.task_suite_name,
+                            "task_id": task_id,
+                            "task_description": task_description,
+                            "episode_idx": episode_idx,
+                            "global_episode": total_episodes + 1,
+                            "sim_t": t,
+                            "action_step_index": action_step_index,
+                            "done": bool(done),
+                            "reward": float(reward),
+                        }
+                        if action_trace_jsonl_file is not None:
+                            action_trace_jsonl_file.write(
+                                json.dumps(
+                                    {
+                                        **action_base_record,
+                                        "executed_action": action_values,
+                                        "policy_action_chunk": gr00t_policy.last_action_chunk,
+                                    }
+                                )
+                                + "\n"
+                            )
+                            if cfg.timing_print_every and len(latency_records) % cfg.timing_print_every == 0:
+                                action_trace_jsonl_file.flush()
+                        if action_trace_csv_writer is not None:
+                            action_trace_csv_writer.writerow(
+                                {
+                                    **action_base_record,
+                                    "action_x": action_values[0],
+                                    "action_y": action_values[1],
+                                    "action_z": action_values[2],
+                                    "action_roll": action_values[3],
+                                    "action_pitch": action_values[4],
+                                    "action_yaw": action_values[5],
+                                    "action_gripper": action_values[6],
+                                }
+                            )
 
                     if cfg.record_timing:
                         timing_record = {
@@ -505,6 +585,14 @@ def eval_libero(cfg: GenerateConfig) -> None:
         log_file.write(f"Saved latency JSONL at {latency_jsonl_path}\n")
         log_file.write(f"Saved latency CSV at {latency_csv_path}\n")
         log_file.write(f"Saved latency summary at {latency_summary_path}\n")
+    if action_trace_jsonl_file is not None:
+        action_trace_jsonl_file.close()
+    if action_trace_csv_file is not None:
+        action_trace_csv_file.close()
+        print(f"Saved action trace JSONL at {action_trace_jsonl_path}")
+        print(f"Saved action trace CSV at {action_trace_csv_path}")
+        log_file.write(f"Saved action trace JSONL at {action_trace_jsonl_path}\n")
+        log_file.write(f"Saved action trace CSV at {action_trace_csv_path}\n")
 
     # Save local log file
     log_file.close()

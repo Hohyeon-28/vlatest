@@ -6,6 +6,7 @@
 #   RUN_ID=my_run bash run_vlatest_servers_only.sh short_real
 #   RUN_ID=my_run bash run_vlatest_servers_only.sh short_fake_w4a16
 #   RUN_ID=my_run bash run_vlatest_servers_only.sh long
+#   RUN_ID=my_run bash run_vlatest_servers_only.sh diag_spatial
 #
 # In another terminal, run:
 #   bash run_vlatest_evals_only.sh <same_batch> <same_RUN_ID>
@@ -94,6 +95,12 @@ specs_for_batch() {
                 "real:libero_10:1:5557" \
                 "fake:libero_10:2:5558"
             ;;
+        diag_spatial)
+            printf '%s\n' \
+                "fake_w4a8:libero_spatial:0:5570" \
+                "real:libero_spatial:1:5571" \
+                "fake:libero_spatial:2:5572"
+            ;;
         *)
             cat >&2 <<EOF
 Usage:
@@ -101,6 +108,7 @@ Usage:
   RUN_ID=my_run bash run_vlatest_servers_only.sh short_real
   RUN_ID=my_run bash run_vlatest_servers_only.sh short_fake_w4a16
   RUN_ID=my_run bash run_vlatest_servers_only.sh long
+  RUN_ID=my_run bash run_vlatest_servers_only.sh diag_spatial
 EOF
             return 2
             ;;
@@ -109,7 +117,7 @@ EOF
 
 validate_batch() {
     case "$BATCH" in
-        short_fake_w4a8|short_real|short_fake_w4a16|long)
+        short_fake_w4a8|short_real|short_fake_w4a16|long|diag_spatial)
             ;;
         *)
             specs_for_batch >/dev/null
@@ -204,6 +212,9 @@ start_server_spec() {
             export GR00T_DIT_MLP_PROBE_DIR="$job_dir/dit_mlp_probe"
             export GR00T_DIT_MLP_PROBE_BINS="${GR00T_DIT_MLP_PROBE_BINS:-128}"
             export GR00T_DIT_MLP_PROBE_ITERS="${GR00T_DIT_MLP_PROBE_ITERS:-first,mid,last}"
+            if [[ "$mode" == "real" && "${ENABLE_DIT_PAIR:-1}" != "0" ]]; then
+                export GR00T_DIT_MLP_PROBE_PAIR=1
+            fi
         fi
         bash "$SCRIPT_DIR/run_quantvla_converted_server.sh" "$mode" "$suite" "$ckpt" "$port"
     ) >"$server_log" 2>&1 &

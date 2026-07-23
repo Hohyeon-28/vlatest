@@ -1,13 +1,19 @@
 #!/bin/bash
 # Script to run GR00T inference server for Libero evaluation
-# Usage: ./run_inference_server.sh [task_suite_name]
+# Usage: ./run_inference_server.sh [task_suite_name] [port]
 # task_suite_name: libero_spatial (default), libero_goal, libero_object, libero_90, libero_10
 
-TASK=${1:-libero_10}
+set -euo pipefail
 
-# Activate groot_test environment
-source ~/miniconda3/etc/profile.d/conda.sh
-conda activate groot_test
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TASK=${1:-libero_10}
+PORT=${2:-${PORT:-5556}}
+
+# Reuse the user's active venv. Only activate conda when it exists.
+if [[ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate "${GR00T_CONDA_ENV:-groot_test}" || true
+fi
 
 # Set model path and data config based on task
 case $TASK in
@@ -45,16 +51,17 @@ echo "=========================================="
 echo "Starting GR00T inference server for $TASK"
 echo "Model: $MODEL_PATH"
 echo "Data Config: $DATA_CONFIG"
-echo "Port: 5556"
+echo "Port: $PORT"
 echo "Denoising Steps: $DENOISING_STEPS"
 echo "=========================================="
 
-cd /home/jz97/VLM_REPO/groot_test/QuantVLA_GR00T
+cd "$SCRIPT_DIR"
+export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
 
-python scripts/inference_service.py \
-    --model_path $MODEL_PATH \
+python -u scripts/inference_service.py \
+    --model_path "$MODEL_PATH" \
     --server \
-    --data_config $DATA_CONFIG \
-    --denoising-steps 8 \
-    --port 5556 \
+    --data_config "$DATA_CONFIG" \
+    --denoising-steps "$DENOISING_STEPS" \
+    --port "$PORT" \
     --embodiment-tag new_embodiment

@@ -5,6 +5,7 @@ It reads:
   - eval_driver.log
   - results/*_latency_summary.json
   - dit_mlp_probe/dit_mlp_up_probe*.csv
+  - dit_mlp_probe/dit_mlp_probe*.csv
 
 and writes:
   - accuracy_latency_summary.csv
@@ -249,7 +250,9 @@ def summarize_task_steps(rows: list[dict]) -> list[dict]:
 
 def read_mlp_probe(exp_dir: Path) -> list[dict]:
     rows: list[dict] = []
-    for csv_path in (exp_dir / "dit_mlp_probe").glob("dit_mlp_up_probe*.csv"):
+    csv_paths = list((exp_dir / "dit_mlp_probe").glob("dit_mlp_up_probe*.csv"))
+    csv_paths.extend((exp_dir / "dit_mlp_probe").glob("dit_mlp_probe*.csv"))
+    for csv_path in sorted(set(csv_paths)):
         if csv_path.stat().st_size <= 101:
             continue
         if "pair" in csv_path.name:
@@ -265,6 +268,7 @@ def read_mlp_probe(exp_dir: Path) -> list[dict]:
                             "suite": row.get("task", ""),
                             "suite_label": suite_label(row.get("task", "")),
                             "exp_dir": str(exp_dir),
+                            "target": row.get("target", "up_proj"),
                             "layer_index": int(row["layer_index"]),
                             "denoise_iter": int(row["denoise_iter"]),
                             "iter_label": row.get("iter_label", f"iter_{row['denoise_iter']}"),
@@ -284,17 +288,18 @@ def read_mlp_probe(exp_dir: Path) -> list[dict]:
 
 
 def summarize_mlp(rows: list[dict]) -> list[dict]:
-    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    grouped: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
     for row in rows:
-        grouped[(row["method"], row["suite"])].append(row)
+        grouped[(row["method"], row["suite"], row.get("target", "up_proj"))].append(row)
 
     out: list[dict] = []
-    for (method, suite), group in grouped.items():
+    for (method, suite, target), group in grouped.items():
         out.append(
             {
                 "method": method,
                 "suite": suite,
                 "suite_label": suite_label(suite),
+                "target": target,
                 "probe_rows": len(group),
                 "layers_seen": len({r["layer_index"] for r in group}),
                 "iters_seen": ",".join(str(x) for x in sorted({r["denoise_iter"] for r in group})),
@@ -306,7 +311,10 @@ def summarize_mlp(rows: list[dict]) -> list[dict]:
                 "max_seen": max((r["max"] for r in group), default=float("nan")),
             }
         )
-    return sorted(out, key=lambda r: (METHOD_ORDER.get(r["method"], 99), SUITE_ORDER.get(r["suite"], 99)))
+    return sorted(
+        out,
+        key=lambda r: (METHOD_ORDER.get(r["method"], 99), SUITE_ORDER.get(r["suite"], 99), r.get("target", "")),
+    )
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:

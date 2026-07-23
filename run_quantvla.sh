@@ -22,11 +22,16 @@
 
 set -e
 
-cd /home/jz97/VLM_REPO/groot_test/QuantVLA_GR00T
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # Task configuration
 TASK_SUITE="${1:-libero_10}"
-if [ -n "$2" ]; then
+PORT="${PORT:-5556}"
+if [[ -n "${2:-}" && "$2" =~ ^[0-9]+$ ]]; then
+    PORT="$2"
+fi
+if [[ -n "${2:-}" && ! "$2" =~ ^[0-9]+$ ]]; then
     MODEL_PATH="$2"
 else
     case "$TASK_SUITE" in
@@ -97,8 +102,17 @@ export GR00T_DUQUANT_ACT_PCT=99.9
 export GR00T_DUQUANT_CALIB_STEPS=32      # Conservative calibration
 export GR00T_DUQUANT_LS=0.15              # Increased smoothing for stability
 
-# Pack directory for caching quantization metadata
-export GR00T_DUQUANT_PACKDIR="/home/jz97/VLM_REPO/groot_test/QuantVLA_GR00T/duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_long_0"
+# Pack directory for caching quantization metadata. Keep one pack per LIBERO
+# checkpoint because spatial/object/goal/long use different post-trained weights.
+case "$TASK_SUITE" in
+    libero_spatial) PACK_TASK="spatial" ;;
+    libero_goal) PACK_TASK="goal" ;;
+    libero_object) PACK_TASK="object" ;;
+    libero_10) PACK_TASK="long" ;;
+    libero_90) PACK_TASK="90" ;;
+    *) PACK_TASK="$TASK_SUITE" ;;
+esac
+export GR00T_DUQUANT_PACKDIR="${GR00T_DUQUANT_PACKDIR:-$SCRIPT_DIR/duquant_packed_full_llm_dit_mlp_w4a8_b64c32ls015_${PACK_TASK}_0}"
 
 
 # ATM configuration (optional)
@@ -109,7 +123,7 @@ export GR00T_DUQUANT_PACKDIR="/home/jz97/VLM_REPO/groot_test/QuantVLA_GR00T/duqu
 # export GR00T_ATM_SCOPE=${GR00T_ATM_SCOPE:-dit}
 
 
-export GR00T_ATM_ALPHA_PATH=/home/jz97/VLM_REPO/groot_test/QuantVLA_GR00T/atm_alpha_beta_long.json
+export GR00T_ATM_ALPHA_PATH="${GR00T_ATM_ALPHA_PATH:-$SCRIPT_DIR/atm_alpha_beta_long.json}"
 export GR00T_ATM_ENABLE=1
 export GR00T_ATM_SCOPE=${GR00T_ATM_SCOPE:-dit}
 
@@ -200,7 +214,11 @@ echo "  - DiT: ~186 layers (varies by model)"
 echo "  - Total: ~270 layers"
 echo ""
 echo "Press Enter to continue with actual quantization, or Ctrl+C to cancel..."
-read -r
+if [[ "${GR00T_DUQUANT_ASSUME_YES:-0}" == "1" ]]; then
+    echo "GR00T_DUQUANT_ASSUME_YES=1, continuing without prompt."
+else
+    read -r
+fi
 
 # Clear dry-run flag
 unset GR00T_DUQUANT_DRYRUN
@@ -219,4 +237,4 @@ echo ""
 
 # Start the quantized inference server
 # This will apply DuQuant to the model during loading
-./run_inference_server.sh "$TASK_SUITE"
+./run_inference_server.sh "$TASK_SUITE" "$PORT"

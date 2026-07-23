@@ -1,4 +1,4 @@
-"""Plot overlaid DiT MLP probe channel distributions.
+r"""Plot overlaid DiT MLP probe channel distributions.
 
 The probe CSVs saved by vlatest contain channel-bin statistics for the
 DiT MLP up-projection output, not raw activation samples. This script plots
@@ -88,6 +88,7 @@ def read_probe_csv(path: Path, label: str, metric: str) -> list[dict]:
                 common = {
                     "source": str(path),
                     "task": task,
+                    "target": row.get("target", "up_proj"),
                     "layer_index": int(row["layer_index"]),
                     "denoise_iter": int(row["denoise_iter"]),
                     "iter_label": row.get("iter_label", f"iter_{row['denoise_iter']}"),
@@ -117,6 +118,7 @@ def read_probe_csv(path: Path, label: str, metric: str) -> list[dict]:
                     "source": str(path),
                     "label": row.get("mode") or label,
                     "task": row.get("task") or path.stem,
+                    "target": row.get("target", "up_proj"),
                     "layer_index": int(row["layer_index"]),
                     "denoise_iter": int(row["denoise_iter"]),
                     "iter_label": row.get("iter_label", f"iter_{row['denoise_iter']}"),
@@ -136,6 +138,7 @@ def average_rows(rows: list[dict], by_layer: bool) -> list[dict]:
         key = (
             row["label"],
             row["task"],
+            row.get("target", "up_proj"),
             layer_key,
             row["denoise_iter"],
             row["iter_label"],
@@ -147,11 +150,12 @@ def average_rows(rows: list[dict], by_layer: bool) -> list[dict]:
 
     out: list[dict] = []
     for key, values in grouped.items():
-        label, task, layer_index, denoise_iter, iter_label, channel_bin = key
+        label, task, target, layer_index, denoise_iter, iter_label, channel_bin = key
         out.append(
             {
                 "label": label,
                 "task": task,
+                "target": target,
                 "layer_index": layer_index,
                 "denoise_iter": denoise_iter,
                 "iter_label": iter_label,
@@ -238,7 +242,7 @@ def write_index(plot_paths: list[Path], out_dir: Path, metric: str) -> None:
   <h1>DiT MLP Probe Distribution Plots</h1>
   <p>
     Metric: <code>{html.escape(metric)}</code>. These plots show channel-bin
-    activation profiles from DiT MLP up-projection probes. They are not raw
+    activation profiles from DiT MLP projection probes. They are not raw
     activation-value histograms.
   </p>
   {''.join(items)}
@@ -278,13 +282,19 @@ def main() -> int:
         averaged = average_rows(rows, by_layer=by_layer)
         groups: dict[tuple, list[dict]] = defaultdict(list)
         for row in averaged:
-            key = (row["task"], row["layer_index"], row["denoise_iter"], row["iter_label"])
+            key = (
+                row["task"],
+                row.get("target", "up_proj"),
+                row["layer_index"],
+                row["denoise_iter"],
+                row["iter_label"],
+            )
             groups[key].append(row)
 
-        for (task, layer_index, denoise_iter, iter_label), group in sorted(groups.items()):
+        for (task, target, layer_index, denoise_iter, iter_label), group in sorted(groups.items()):
             layer_text = "all_layers" if layer_index == "all_layers" else f"L{int(layer_index):02d}"
-            title = f"{task} / {layer_text} / {iter_label}({denoise_iter}) / {args.metric}"
-            name = safe_name(f"{task}_{layer_text}_{iter_label}_{args.metric}.png")
+            title = f"{task} / {target} / {layer_text} / {iter_label}({denoise_iter}) / {args.metric}"
+            name = safe_name(f"{task}_{target}_{layer_text}_{iter_label}_{args.metric}.png")
             output = out_dir / name
             write_plot(group, output, title, args.metric)
             if output.exists():
