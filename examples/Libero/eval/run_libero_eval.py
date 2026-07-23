@@ -175,6 +175,10 @@ class GenerateConfig:
     save_videos: bool = False
     """Record executed actions and full policy action chunks for trajectory comparison."""
     record_actions: bool = False
+    """Optional second policy server port queried on the same observation for action-diff diagnostics."""
+    compare_port: int | None = None
+    """Label for the optional compare-port policy."""
+    compare_label: str = "compare"
 
 
 class GR00TPolicy:
@@ -336,6 +340,19 @@ def eval_libero(cfg: GenerateConfig) -> None:
                 "action_pitch",
                 "action_yaw",
                 "action_gripper",
+                "compare_label",
+                "compare_action_x",
+                "compare_action_y",
+                "compare_action_z",
+                "compare_action_roll",
+                "compare_action_pitch",
+                "compare_action_yaw",
+                "compare_action_gripper",
+                "compare_mean_abs_diff",
+                "compare_rms_diff",
+                "compare_max_abs_diff",
+                "compare_cosine_similarity",
+                "compare_get_action_ms",
             ],
         )
         action_trace_csv_writer.writeheader()
@@ -367,6 +384,11 @@ def eval_libero(cfg: GenerateConfig) -> None:
         env, task_description = get_libero_env(task, resolution=256)
 
         gr00t_policy = GR00TPolicy(host="localhost", port=cfg.port, headless=cfg.headless)
+        compare_policy = (
+            GR00TPolicy(host="localhost", port=cfg.compare_port, headless=cfg.headless)
+            if cfg.compare_port is not None
+            else None
+        )
 
         # Start episodes
         task_episodes, task_successes = 0, 0
@@ -422,6 +444,12 @@ def eval_libero(cfg: GenerateConfig) -> None:
                         obs,
                         task.language,
                     )
+                    compare_action = None
+                    compare_get_action_ms = None
+                    if compare_policy is not None:
+                        compare_start = time.perf_counter()
+                        compare_action = compare_policy.get_action(obs, task.language)
+                        compare_get_action_ms = (time.perf_counter() - compare_start) * 1000.0
 
                     # Execute action in environment
                     env_step_start = time.perf_counter()
@@ -431,6 +459,26 @@ def eval_libero(cfg: GenerateConfig) -> None:
 
                     if cfg.record_actions:
                         action_values = [float(value) for value in action.tolist()]
+                        compare_values = (
+                            [float(value) for value in compare_action.tolist()] if compare_action is not None else None
+                        )
+                        compare_metrics = {}
+                        if compare_values is not None:
+                            diffs = [right - left for left, right in zip(action_values, compare_values)]
+                            abs_diffs = [abs(value) for value in diffs]
+                            left_norm = float(np.linalg.norm(action_values))
+                            right_norm = float(np.linalg.norm(compare_values))
+                            dot = float(np.dot(action_values, compare_values))
+                            cosine = dot / (left_norm * right_norm) if left_norm > 1e-12 and right_norm > 1e-12 else None
+                            compare_metrics = {
+                                "compare_label": cfg.compare_label,
+                                "compare_action": compare_values,
+                                "compare_mean_abs_diff": float(np.mean(abs_diffs)),
+                                "compare_rms_diff": float(np.sqrt(np.mean(np.square(diffs)))),
+                                "compare_max_abs_diff": float(np.max(abs_diffs)),
+                                "compare_cosine_similarity": cosine,
+                                "compare_get_action_ms": compare_get_action_ms,
+                            }
                         action_base_record = {
                             "task_suite": cfg.task_suite_name,
                             "task_id": task_id,
@@ -449,6 +497,10 @@ def eval_libero(cfg: GenerateConfig) -> None:
                                         **action_base_record,
                                         "executed_action": action_values,
                                         "policy_action_chunk": gr00t_policy.last_action_chunk,
+                                        "compare_policy_action_chunk": compare_policy.last_action_chunk
+                                        if compare_policy is not None
+                                        else {},
+                                        **compare_metrics,
                                     }
                                 )
                                 + "\n"
@@ -466,6 +518,19 @@ def eval_libero(cfg: GenerateConfig) -> None:
                                     "action_pitch": action_values[4],
                                     "action_yaw": action_values[5],
                                     "action_gripper": action_values[6],
+                                    "compare_label": compare_metrics.get("compare_label", ""),
+                                    "compare_action_x": compare_values[0] if compare_values is not None else "",
+                                    "compare_action_y": compare_values[1] if compare_values is not None else "",
+                                    "compare_action_z": compare_values[2] if compare_values is not None else "",
+                                    "compare_action_roll": compare_values[3] if compare_values is not None else "",
+                                    "compare_action_pitch": compare_values[4] if compare_values is not None else "",
+                                    "compare_action_yaw": compare_values[5] if compare_values is not None else "",
+                                    "compare_action_gripper": compare_values[6] if compare_values is not None else "",
+                                    "compare_mean_abs_diff": compare_metrics.get("compare_mean_abs_diff", ""),
+                                    "compare_rms_diff": compare_metrics.get("compare_rms_diff", ""),
+                                    "compare_max_abs_diff": compare_metrics.get("compare_max_abs_diff", ""),
+                                    "compare_cosine_similarity": compare_metrics.get("compare_cosine_similarity", ""),
+                                    "compare_get_action_ms": compare_metrics.get("compare_get_action_ms", ""),
                                 }
                             )
 
