@@ -2,7 +2,7 @@
 # Run GR00T LIBERO inference server with converted QuantVLA GPTQ-like weights.
 #
 # Usage:
-#   CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh <real|fake|fake_w4a8> <task> [converted_checkpoint] [port]
+#   CUDA_VISIBLE_DEVICES=0 bash run_quantvla_converted_server.sh <real|fake|fake_w4a8|naive_fake_w4a16|naive_fake_w4a8> <task> [converted_checkpoint] [port]
 
 set -euo pipefail
 
@@ -27,9 +27,17 @@ case "$MODE" in
     fake_w4a8|w4a8|torch_w4a8)
         MODE="fake_w4a8"
         ;;
+    naive|naive_fake|naive_fake_w4a16|naive_w4a16|dense_w4a16|original_w4a16)
+        MODE="fake"
+        export QUANTVLA_FAKE_WEIGHT_SOURCE="naive_w4"
+        ;;
+    naive_fake_w4a8|naive_w4a8|dense_w4a8|original_w4a8)
+        MODE="fake_w4a8"
+        export QUANTVLA_FAKE_WEIGHT_SOURCE="naive_w4"
+        ;;
     *)
         echo "Unknown mode: $MODE" >&2
-        echo "Valid modes: real, fake, fake_w4a8" >&2
+        echo "Valid modes: real, fake, fake_w4a8, naive_fake_w4a16, naive_fake_w4a8" >&2
         exit 1
         ;;
 esac

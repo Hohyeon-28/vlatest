@@ -4,9 +4,14 @@ Definitions used here:
 
 - FakeQuant: raw W4 dense reference weights, saved before GPTQ-like packing,
   are executed with torch.nn.functional.linear.
+- Naive FakeQuant: the original dense nn.Linear weights from the loaded GR00T
+  checkpoint are quantized directly to per-group symmetric W4, dequantized back
+  to dense tensors, and executed with torch.nn.functional.linear. QuantVLA
+  input/output transforms are intentionally disabled for this source.
 - RealQuant: the same W4 codes/scales are executed after GPTQ-like packing by
   vLLM's GPTQ-Marlin Linear path.
-- QuantVLA input/output transforms are preserved around both paths.
+- QuantVLA input/output transforms are preserved around converted QuantVLA
+  fake/real paths.
 """
 
 from __future__ import annotations
@@ -148,6 +153,36 @@ def _fake_quantize_activation(x: torch.Tensor, bits: int = 8) -> torch.Tensor:
     return q * scale
 
 
+def quantize_dequantize_naive_w4(
+    weight: torch.Tensor,
+    group_size: int,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Direct symmetric per-output-channel W4 quant/dequant of a dense Linear weight.
+
+    This is deliberately independent from QuantVLA/DuQuant transforms and
+    packing. It is the "plain W4" fake-quant baseline for isolating what the
+    QuantVLA transform and Marlin packing/kernel contribute.
+    """
+
+    dense = weight.detach().to(torch.float32).contiguous()
+    out_features, in_features = dense.shape
+    requested_group = int(os.environ.get("QUANTVLA_NAIVE_W4_GROUP_SIZE", str(group_size or in_features)))
+    if requested_group <= 0:
+        requested_group = in_features
+
+    qmin = -8
+    qmax = 7
+    dequant = torch.empty_like(dense)
+    for start in range(0, in_features, requested_group):
+        end = min(start + requested_group, in_features)
+        chunk = dense[:, start:end]
+        scale = chunk.abs().amax(dim=1, keepdim=True).clamp_min(eps) / qmax
+        q = torch.round(chunk / scale).clamp(qmin, qmax)
+        dequant[:, start:end] = q * scale
+    return dequant
+
+
 def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -223,9 +258,14 @@ class ConvertedQuantVLACheckpoint:
 
 
 class QuantVLAFakeQuantLinear(nn.Module):
-    """FakeQuant/reference path: raw W4 dense reference, torch F.linear."""
+    """FakeQuant/reference path: W4 dense reference, torch F.linear."""
 
-    def __init__(self, pack: ConvertedLayerPack, dtype: torch.dtype = torch.bfloat16) -> None:
+    def __init__(
+        self,
+        pack: ConvertedLayerPack,
+        dtype: torch.dtype = torch.bfloat16,
+        source_linear: nn.Linear | None = None,
+    ) -> None:
         super().__init__()
         self.name = pack.prefix
         self.in_features = pack.in_features
@@ -233,6 +273,7 @@ class QuantVLAFakeQuantLinear(nn.Module):
         self.group_size = pack.group_size
         self.row_rot_mode = pack.row_rot_mode
         self.transform_pack = pack.transform_pack
+        self.use_quantvla_transform = True
         weight_source = os.environ.get("QUANTVLA_FAKE_WEIGHT_SOURCE", "raw_w4").strip().lower()
         if weight_source in ("raw", "raw_w4", "prepack"):
             if pack.raw_w4_weight is None:
@@ -250,20 +291,34 @@ class QuantVLAFakeQuantLinear(nn.Module):
                 self.group_size,
             )
             weight_source = "packed"
+        elif weight_source in ("naive", "naive_w4", "dense_w4", "original_w4"):
+            if source_linear is None:
+                raise ValueError(f"{pack.prefix} naive_w4 fake quant requires the original nn.Linear module")
+            weight = quantize_dequantize_naive_w4(source_linear.weight, self.group_size)
+            weight_source = "naive_w4"
+            self.use_quantvla_transform = False
+            self.row_rot_mode = "none"
         else:
-            raise ValueError("QUANTVLA_FAKE_WEIGHT_SOURCE must be 'raw_w4' or 'packed'")
+            raise ValueError("QUANTVLA_FAKE_WEIGHT_SOURCE must be 'raw_w4', 'packed', or 'naive_w4'")
         self.weight_source = weight_source
         self.register_buffer("weight", weight.to(dtype=dtype).contiguous(), persistent=False)
-        if pack.bias is None:
+
+        if weight_source == "naive_w4" and source_linear is not None:
+            bias = source_linear.bias.detach() if source_linear.bias is not None else None
+        else:
+            bias = pack.bias
+        if bias is None:
             self.bias = None
         else:
-            self.register_buffer("bias", pack.bias.to(dtype=dtype).contiguous(), persistent=False)
+            self.register_buffer("bias", bias.to(dtype=dtype).contiguous(), persistent=False)
 
     @torch.inference_mode()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        work = apply_quantvla_input_transform(x.to(torch.float32), self.transform_pack)
+        work = x.to(torch.float32)
+        if self.use_quantvla_transform:
+            work = apply_quantvla_input_transform(work, self.transform_pack)
         out = F.linear(work.to(dtype=self.weight.dtype), self.weight, self.bias)
-        if self.row_rot_mode == "restore":
+        if self.use_quantvla_transform and self.row_rot_mode == "restore":
             out = apply_quantvla_output_restore(out.to(torch.float32), self.transform_pack).to(dtype=self.weight.dtype)
         return out
 
@@ -271,16 +326,23 @@ class QuantVLAFakeQuantLinear(nn.Module):
 class QuantVLAFakeQuantW4A8Linear(QuantVLAFakeQuantLinear):
     """FakeQuant W4A8 path: W4 dense reference plus dynamic INT8 activation fake quant."""
 
-    def __init__(self, pack: ConvertedLayerPack, dtype: torch.dtype = torch.bfloat16) -> None:
-        super().__init__(pack, dtype=dtype)
+    def __init__(
+        self,
+        pack: ConvertedLayerPack,
+        dtype: torch.dtype = torch.bfloat16,
+        source_linear: nn.Linear | None = None,
+    ) -> None:
+        super().__init__(pack, dtype=dtype, source_linear=source_linear)
         self.activation_bits = int(os.environ.get("QUANTVLA_FAKE_ACT_BITS", "8"))
 
     @torch.inference_mode()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        work = apply_quantvla_input_transform(x.to(torch.float32), self.transform_pack)
+        work = x.to(torch.float32)
+        if self.use_quantvla_transform:
+            work = apply_quantvla_input_transform(work, self.transform_pack)
         work = _fake_quantize_activation(work, self.activation_bits)
         out = F.linear(work.to(dtype=self.weight.dtype), self.weight, self.bias)
-        if self.row_rot_mode == "restore":
+        if self.use_quantvla_transform and self.row_rot_mode == "restore":
             out = apply_quantvla_output_restore(out.to(torch.float32), self.transform_pack).to(dtype=self.weight.dtype)
         return out
 
@@ -591,9 +653,9 @@ def replace_quantvla_converted_linears(
                 else:
                     wrapper = QuantVLARealQuantMarlinLinear(pack, dtype=dtype)
             elif mode == GPTQ_QUANT_MODE_FAKE_W4A8:
-                wrapper = QuantVLAFakeQuantW4A8Linear(pack, dtype=dtype)
+                wrapper = QuantVLAFakeQuantW4A8Linear(pack, dtype=dtype, source_linear=module)
             else:
-                wrapper = QuantVLAFakeQuantLinear(pack, dtype=dtype)
+                wrapper = QuantVLAFakeQuantLinear(pack, dtype=dtype, source_linear=module)
         except Exception as exc:
             unreplaced.append(
                 ReplacementIssue(name, f"failed to initialize {mode} wrapper: {type(exc).__name__}: {exc}")
